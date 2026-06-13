@@ -434,6 +434,18 @@ fn update_item_color(state: tauri::State<'_, Arc<AppState>>, id: String, color: 
     false
 }
 
+#[tauri::command]
+fn update_item_title(state: tauri::State<'_, Arc<AppState>>, id: String, title: String) -> bool {
+    let mut items = state.items.lock().unwrap();
+    if let Some(item) = items.iter_mut().find(|i| i.id == id) {
+        item.title = title;
+        drop(items);
+        state.save_to_disk();
+        return true;
+    }
+    false
+}
+
 // ─── Clipboard monitoring thread ───
 
 fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
@@ -998,6 +1010,7 @@ pub fn run() {
             toggle_monitoring,
             copy_to_clipboard,
             update_item_color,
+            update_item_title,
             open_link,
             get_shortcut,
             set_shortcut,

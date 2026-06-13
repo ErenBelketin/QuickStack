@@ -193,11 +193,33 @@
         </div>
     </div>
 
+    <!-- Rename Modal -->
+    <div class="modal-overlay" id="renameModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-pen"></i> Adını Değiştir</h2>
+                <button class="modal-close" id="renameModalClose"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="renameInput">Yeni Adı</label>
+                    <input type="text" id="renameInput" class="form-input" placeholder="Yeni adı girin..." autocomplete="off">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="renameModalCancel">İptal</button>
+                <button class="btn btn-primary" id="renameModalSubmit"><i class="fa-solid fa-check"></i> Kaydet</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
     <!-- Context Menu -->
     <div class="ctx-menu" id="contextMenu">
+        <button class="ctx-item" data-action="rename"><i class="fa-solid fa-pen"></i> <span>Adını Değiştir</span></button>
+        <div class="ctx-divider"></div>
         <button class="ctx-item" data-action="pin"><i class="fa-solid fa-thumbtack"></i> <span id="ctxPinText">Sabitle</span></button>
         <button class="ctx-item" data-action="favorite"><i class="fa-regular fa-star"></i> <span id="ctxFavText">Favorilere Ekle</span></button>
         <div class="ctx-divider"></div>

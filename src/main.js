@@ -37,6 +37,14 @@ const toastContainer = document.getElementById('toastContainer');
 const contextMenu = document.getElementById('contextMenu');
 const ctxPinText = document.getElementById('ctxPinText');
 
+// Rename Modal elements
+const renameModal = document.getElementById('renameModal');
+const renameModalClose = document.getElementById('renameModalClose');
+const renameModalCancel = document.getElementById('renameModalCancel');
+const renameModalSubmit = document.getElementById('renameModalSubmit');
+const renameInput = document.getElementById('renameInput');
+let renameTargetId = null;
+
 // Confirm Modal elements
 const confirmModal = document.getElementById('confirmModal');
 const confirmModalClose = document.getElementById('confirmModalClose');
@@ -541,7 +549,9 @@ contextMenu.addEventListener('click', (e) => {
   const item = itemsState.find(i => i.id === targetId);
   if (!item) return;
 
-  if (action === 'pin') {
+  if (action === 'rename') {
+    openRenameModal(item);
+  } else if (action === 'pin') {
     togglePinItem(targetId);
   } else if (action === 'favorite') {
     toggleFavoriteItem(targetId);
@@ -614,6 +624,58 @@ modalClose.addEventListener('click', closeModal);
 modalCancel.addEventListener('click', closeModal);
 addModal.addEventListener('click', (e) => {
   if (e.target === addModal) closeModal();
+});
+
+// Rename Modal Logic
+function openRenameModal(item) {
+  renameTargetId = item.id;
+  renameInput.value = item.title || '';
+  renameModal.classList.add('visible');
+  renameInput.focus();
+  renameInput.select();
+}
+
+function closeRenameModal() {
+  renameModal.classList.remove('visible');
+  renameInput.value = '';
+  renameTargetId = null;
+}
+
+renameModalClose.addEventListener('click', closeRenameModal);
+renameModalCancel.addEventListener('click', closeRenameModal);
+renameModal.addEventListener('click', (e) => {
+  if (e.target === renameModal) closeRenameModal();
+});
+
+renameModalSubmit.addEventListener('click', async () => {
+  const newTitle = renameInput.value.trim();
+  if (!newTitle) {
+    showToast('Lütfen geçerli bir isim girin!', 'error');
+    renameInput.focus();
+    return;
+  }
+  if (!renameTargetId) return;
+
+  try {
+    const success = await invoke('update_item_title', { id: renameTargetId, title: newTitle });
+    if (success) {
+      const item = itemsState.find(i => i.id === renameTargetId);
+      if (item) {
+        item.title = newTitle;
+        render();
+        closeRenameModal();
+        showToast('Öğe adı başarıyla güncellendi', 'success');
+      }
+    }
+  } catch (err) {
+    showToast('Ad değiştirilemedi: ' + err, 'error');
+  }
+});
+
+renameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    renameModalSubmit.click();
+  }
 });
 
 modalSubmit.addEventListener('click', async () => {
@@ -729,6 +791,7 @@ document.addEventListener('keydown', (e) => {
     closeConfirm(false);
     closeContextMenu();
     closeSettingsModal();
+    closeRenameModal();
     if (document.activeElement === searchInput) {
       searchInput.blur();
     }
