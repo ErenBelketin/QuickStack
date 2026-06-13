@@ -1,5 +1,7 @@
 # QuickStack - Akıllı Pano ve Dosya Yönetimi
 
+🚀 Akıllı Pano ve Dosya Yöneticisi | Tauri & Rust ile geliştirilmiş, ultra hafif, sonsuz kaydırma (lag-free) ve favori/sabitleme destekli, modern pano geçmişi aracı.
+
 QuickStack, kopyaladığınız her şeyi (metin, kod, bağlantı, görsel) otomatik olarak kaydeden ve düzenleyen akıllı bir pano yöneticisidir.
 
 ## Özellikler
