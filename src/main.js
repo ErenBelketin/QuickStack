@@ -773,9 +773,19 @@ const settingsModalClose = document.getElementById('settingsModalClose');
 const settingsModalCancel = document.getElementById('settingsModalCancel');
 const settingsModalSubmit = document.getElementById('settingsModalSubmit');
 const hotkeyInput = document.getElementById('hotkeyInput');
+const resetHotkeyBtn = document.getElementById('resetHotkeyBtn');
 
 let currentHotkey = 'Win + Z';
 let recordedHotkey = '';
+
+if (resetHotkeyBtn) {
+  resetHotkeyBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    recordedHotkey = 'Win + Z';
+    hotkeyInput.value = 'Win + Z';
+    showToast('Kısayol Win + Z olarak ayarlandı, kaydetmeyi unutmayın!', 'success');
+  });
+}
 
 async function loadSettings() {
   try {
