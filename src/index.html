@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuickStack</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-logo">
+            <div class="logo-icon"><i class="fa-solid fa-layer-group"></i></div>
+            <div class="logo-info">
+                <span class="logo-text">QuickStack</span>
+                <span class="logo-sub">Pano Yönetimi</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="#" class="nav-item active" data-filter="all">
+                <i class="fa-solid fa-border-all"></i><span>Tümü</span>
+                <span class="nav-badge" id="badgeAll">0</span>
+            </a>
+            <a href="#" class="nav-item" data-filter="text">
+                <i class="fa-solid fa-font"></i><span>Metin</span>
+                <span class="nav-badge" id="badgeText">0</span>
+            </a>
+            <a href="#" class="nav-item" data-filter="code">
+                <i class="fa-solid fa-code"></i><span>Kod</span>
+                <span class="nav-badge" id="badgeCode">0</span>
+            </a>
+            <a href="#" class="nav-item" data-filter="link">
+                <i class="fa-solid fa-link"></i><span>Bağlantı</span>
+                <span class="nav-badge" id="badgeLink">0</span>
+            </a>
+            <a href="#" class="nav-item" data-filter="image">
+                <i class="fa-solid fa-image"></i><span>Görsel</span>
+                <span class="nav-badge" id="badgeImage">0</span>
+            </a>
+
+            <div class="nav-divider"></div>
+
+            <a href="#" class="nav-item" data-filter="pinned">
+                <i class="fa-solid fa-star"></i><span>Favoriler</span>
+                <span class="nav-badge" id="badgePinned">0</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-bottom">
+            <div class="sidebar-stats">
+                <div class="stat-row">
+                    <span class="stat-label"><i class="fa-solid fa-database"></i> Depolama</span>
+                    <span class="stat-value" id="statStorage">0 B</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label"><i class="fa-solid fa-layer-group"></i> Toplam</span>
+                    <span class="stat-value" id="statTotal">0</span>
+                </div>
+            </div>
+            <div class="sidebar-shortcuts">
+                <kbd>Ctrl+V</kbd> yapıştır &nbsp; <kbd>/</kbd> ara
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+        <!-- Topbar -->
+        <header class="topbar">
+            <button class="sidebar-toggle" id="sidebarToggle"><i class="fa-solid fa-bars"></i></button>
+
+            <div class="search-box">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="text" id="searchInput" placeholder="Öğeleri ara... (/ ile odaklan)">
+            </div>
+
+            <div class="topbar-actions">
+                <div class="sort-wrap" id="sortDropdown">
+                    <button class="sort-btn" id="sortDropdownBtn">
+                        <span id="sortDropdownVal">En Yeni</span>
+                        <i class="fa-solid fa-chevron-down"></i>
+                    </button>
+                    <div class="sort-options" id="sortDropdownOptions">
+                        <div class="sort-opt-item active" data-value="newest">En Yeni</div>
+                        <div class="sort-opt-item" data-value="oldest">En Eski</div>
+                        <div class="sort-opt-item" data-value="name">Ada Göre</div>
+                    </div>
+                </div>
+                <div class="view-toggle">
+                    <button class="vt-btn active" data-view="grid"><i class="fa-solid fa-grip"></i></button>
+                    <button class="vt-btn" data-view="list"><i class="fa-solid fa-list"></i></button>
+                </div>
+                <button class="btn btn-primary" id="addBtn"><i class="fa-solid fa-plus"></i><span>Yeni Ekle</span></button>
+                <button class="btn btn-ghost" id="clearBtn" title="Favori olmayanları temizle"><i class="fa-solid fa-trash-can"></i></button>
+            </div>
+        </header>
+
+        <!-- Content -->
+        <div class="content-area">
+            <div class="cards-grid" id="cardsContainer"></div>
+
+            <div class="empty-state" id="emptyState">
+                <div class="empty-icon"><i class="fa-solid fa-clipboard-list"></i></div>
+                <h3>Henüz bir şey yok</h3>
+                <p>Herhangi bir metni kopyalayın — otomatik olarak burada görünecek</p>
+                <div class="empty-hint">
+                    <span><kbd>Ctrl</kbd>+<kbd>C</kbd> kopyala</span>
+                    <span><kbd>/</kbd> ara</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Add Modal -->
+    <div class="modal-overlay" id="addModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-plus-circle"></i> Yeni Öğe Ekle</h2>
+                <button class="modal-close" id="modalClose"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-tabs">
+                <button class="mtab active" data-type="text"><i class="fa-solid fa-font"></i> Metin</button>
+                <button class="mtab" data-type="link"><i class="fa-solid fa-link"></i> Bağlantı</button>
+                <button class="mtab" data-type="code"><i class="fa-solid fa-code"></i> Kod</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="itemTitle">Başlık (opsiyonel)</label>
+                    <input type="text" id="itemTitle" class="form-input" placeholder="Başlık girin...">
+                </div>
+                <div class="form-group">
+                    <label for="itemContent">İçerik</label>
+                    <textarea id="itemContent" class="form-input" rows="7" placeholder="İçeriği buraya yazın veya yapıştırın..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="modalCancel">İptal</button>
+                <button class="btn btn-primary" id="modalSubmit"><i class="fa-solid fa-plus"></i> Ekle</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Modal -->
+    <div class="modal-overlay" id="confirmModal">
+        <div class="modal confirm-modal">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-triangle-exclamation" style="color: var(--rose);"></i> Pano Geçmişini Temizle</h2>
+                <button class="modal-close" id="confirmModalClose"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p>Kopyalanan tüm öğeleri (favoriler dahil) kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="confirmModalCancel">İptal</button>
+                <button class="btn btn-danger" id="confirmModalSubmit" style="background: var(--rose); color: white; box-shadow: 0 2px 12px rgba(244,63,94,0.28);"><i class="fa-solid fa-trash-can"></i> Evet, Hepsini Sil</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Context Menu -->
+    <div class="ctx-menu" id="contextMenu">
+        <button class="ctx-item" data-action="pin"><i class="fa-solid fa-thumbtack"></i> <span id="ctxPinText">Sabitle</span></button>
+        <button class="ctx-item" data-action="favorite"><i class="fa-regular fa-star"></i> <span id="ctxFavText">Favorilere Ekle</span></button>
+        <div class="ctx-divider"></div>
+        <div class="ctx-colors">
+            <span class="ctx-colors-label">Renk Değiştir</span>
+            <div class="colors-row">
+                <span class="color-dot" data-color="#7c3aed" style="background:#7c3aed" title="Mor"></span>
+                <span class="color-dot" data-color="#06b6d4" style="background:#06b6d4" title="Turkuaz"></span>
+                <span class="color-dot" data-color="#10b981" style="background:#10b981" title="Yeşil"></span>
+                <span class="color-dot" data-color="#f59e0b" style="background:#f59e0b" title="Sarı"></span>
+                <span class="color-dot" data-color="#f43f5e" style="background:#f43f5e" title="Kırmızı"></span>
+                <span class="color-dot" data-color="" style="background:transparent; border:1px dashed var(--text3)" title="Varsayılan"></span>
+            </div>
+        </div>
+        <div class="ctx-divider"></div>
+        <button class="ctx-item ctx-danger" data-action="delete"><i class="fa-solid fa-trash-can"></i> Sil</button>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>

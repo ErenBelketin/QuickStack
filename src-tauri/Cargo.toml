@@ -1,0 +1,30 @@
+[package]
+name = "quickstack"
+version = "0.1.0"
+description = "QuickStack - Akıllı Pano ve Dosya Yönetimi"
+authors = ["QuickStack"]
+edition = "2021"
+
+[lib]
+name = "quickstack_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+arboard = "3"
+base64 = "0.22"
+image = "0.25"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser", "winbase"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
