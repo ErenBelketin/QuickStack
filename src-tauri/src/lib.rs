@@ -4,7 +4,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -611,7 +611,252 @@ fn setup_autostart() {
 #[cfg(not(target_os = "windows"))]
 fn setup_autostart() {}
 
+#[cfg(target_os = "windows")]
+fn setup_portable_uninstall_registry() {
+    use std::process::Command;
+    use std::os::windows::process::CommandExt;
+
+    let exe_path = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let exe_path_str = exe_path.to_string_lossy().to_string();
+
+    let display_name = "QuickStack (Portable)";
+    let reg_key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QuickStackPortable";
+
+    // Build the uninstall string command
+    let uninstall_cmd = format!(
+        "cmd.exe /c \"taskkill /f /im quickstack.exe & \
+         del /f /q \\\"%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\QuickStack.lnk\\\" & \
+         rmdir /s /q \\\"%APPDATA%\\com.quickstack.app\\\" & \
+         reg delete \\\"{}\\\" /f & \
+         powershell -Command \\\"Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('QuickStack ayarları ve kısayolu başarıyla temizlendi. Artık indirdiğiniz exe dosyasını silebilirsiniz.', 'QuickStack Portable')\\\"\"",
+        reg_key
+    );
+
+    // Register DisplayName
+    let _ = Command::new("reg")
+        .arg("add")
+        .arg(reg_key)
+        .arg("/v")
+        .arg("DisplayName")
+        .arg("/t")
+        .arg("REG_SZ")
+        .arg("/d")
+        .arg(display_name)
+        .arg("/f")
+        .creation_flags(0x08000000)
+        .status();
+
+    // Register UninstallString
+    let _ = Command::new("reg")
+        .arg("add")
+        .arg(reg_key)
+        .arg("/v")
+        .arg("UninstallString")
+        .arg("/t")
+        .arg("REG_SZ")
+        .arg("/d")
+        .arg(&uninstall_cmd)
+        .arg("/f")
+        .creation_flags(0x08000000)
+        .status();
+
+    // Register DisplayIcon
+    let _ = Command::new("reg")
+        .arg("add")
+        .arg(reg_key)
+        .arg("/v")
+        .arg("DisplayIcon")
+        .arg("/t")
+        .arg("REG_SZ")
+        .arg("/d")
+        .arg(&exe_path_str)
+        .arg("/f")
+        .creation_flags(0x08000000)
+        .status();
+
+    // Register Publisher
+    let _ = Command::new("reg")
+        .arg("add")
+        .arg(reg_key)
+        .arg("/v")
+        .arg("Publisher")
+        .arg("/t")
+        .arg("REG_SZ")
+        .arg("/d")
+        .arg("QuickStack")
+        .arg("/f")
+        .creation_flags(0x08000000)
+        .status();
+
+    // Register DisplayVersion
+    let _ = Command::new("reg")
+        .arg("add")
+        .arg(reg_key)
+        .arg("/v")
+        .arg("DisplayVersion")
+        .arg("/t")
+        .arg("REG_SZ")
+        .arg("/d")
+        .arg("0.1.0")
+        .arg("/f")
+        .creation_flags(0x08000000)
+        .status();
+}
+
+#[cfg(not(target_os = "windows"))]
+fn setup_portable_uninstall_registry() {}
+
+
 // ─── Native Win32 Hotkey Listener ───
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutConfig {
+    pub win: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub vk_code: u32,
+    pub display_name: String,
+}
+
+static SHORTCUT_CONFIG: RwLock<Option<ShortcutConfig>> = RwLock::new(None);
+
+fn parse_shortcut(shortcut_str: &str) -> Option<ShortcutConfig> {
+    let mut win = false;
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut vk_code = 0;
+
+    let parts: Vec<&str> = shortcut_str.split('+').map(|s| s.trim()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    for part in &parts {
+        let lower = part.to_lowercase();
+        if lower == "win" || lower == "super" || lower == "windows" {
+            win = true;
+        } else if lower == "ctrl" || lower == "control" {
+            ctrl = true;
+        } else if lower == "alt" {
+            alt = true;
+        } else if lower == "shift" {
+            shift = true;
+        } else {
+            if lower.len() == 1 {
+                let c = lower.chars().next()?;
+                if c >= 'a' && c <= 'z' {
+                    vk_code = c as u32 - 'a' as u32 + 0x41;
+                } else if c >= '0' && c <= '9' {
+                    vk_code = c as u32 - '0' as u32 + 0x30;
+                }
+            } else if lower == "space" {
+                vk_code = 0x20;
+            } else if lower == "tab" {
+                vk_code = 0x09;
+            } else if lower == "enter" || lower == "return" {
+                vk_code = 0x0D;
+            } else if lower == "escape" || lower == "esc" {
+                vk_code = 0x1B;
+            } else if lower.starts_with('f') && lower.len() > 1 {
+                if let Ok(num) = lower[1..].parse::<u32>() {
+                    if num >= 1 && num <= 12 {
+                        vk_code = 0x70 + (num - 1);
+                    }
+                }
+            } else if lower == "backspace" {
+                vk_code = 0x08;
+            } else if lower == "insert" {
+                vk_code = 0x2D;
+            } else if lower == "delete" || lower == "del" {
+                vk_code = 0x2E;
+            } else if lower == "home" {
+                vk_code = 0x24;
+            } else if lower == "end" {
+                vk_code = 0x23;
+            } else if lower == "pageup" || lower == "pgup" {
+                vk_code = 0x21;
+            } else if lower == "pagedown" || lower == "pgdn" {
+                vk_code = 0x22;
+            } else if lower == "up" {
+                vk_code = 0x26;
+            } else if lower == "down" {
+                vk_code = 0x28;
+            } else if lower == "left" {
+                vk_code = 0x25;
+            } else if lower == "right" {
+                vk_code = 0x27;
+            }
+        }
+    }
+
+    if vk_code == 0 {
+        return None;
+    }
+
+    let mut display_parts = Vec::new();
+    if win { display_parts.push("Win"); }
+    if ctrl { display_parts.push("Ctrl"); }
+    if alt { display_parts.push("Alt"); }
+    if shift { display_parts.push("Shift"); }
+
+    let main_key_str = parts.iter().find(|part| {
+        let l = part.to_lowercase();
+        l != "win" && l != "super" && l != "windows" && l != "ctrl" && l != "control" && l != "alt" && l != "shift"
+    })?;
+
+    let main_key_cap = if main_key_str.len() == 1 {
+        main_key_str.to_uppercase()
+    } else {
+        let mut chars = main_key_str.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+        }
+    };
+    display_parts.push(&main_key_cap);
+
+    Some(ShortcutConfig {
+        win,
+        ctrl,
+        alt,
+        shift,
+        vk_code,
+        display_name: display_parts.join(" + "),
+    })
+}
+
+#[tauri::command]
+fn get_shortcut() -> String {
+    let config_guard = SHORTCUT_CONFIG.read().unwrap();
+    match &*config_guard {
+        Some(c) => c.display_name.clone(),
+        None => "Win + Z".to_string(),
+    }
+}
+
+#[tauri::command]
+fn set_shortcut(app_handle: tauri::AppHandle, shortcut: String) -> Result<String, String> {
+    let parsed = parse_shortcut(&shortcut).ok_or_else(|| "Geçersiz kısayol formatı!".to_string())?;
+    
+    let app_data_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let settings_file = app_data_dir.join("quickstack_settings.json");
+    if let Some(parent) = settings_file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    
+    let json_str = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
+    fs::write(settings_file, json_str).map_err(|e| e.to_string())?;
+    
+    let display_name = parsed.display_name.clone();
+    *SHORTCUT_CONFIG.write().unwrap() = Some(parsed);
+    
+    Ok(display_name)
+}
 
 use std::sync::OnceLock;
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
@@ -628,13 +873,29 @@ extern "system" fn low_level_keyboard_proc(n_code: i32, w_param: winapi::shared:
             let kbd_struct = unsafe { *(l_param as *const KBDLLHOOKSTRUCT) };
             let vk_code = kbd_struct.vkCode;
             
-            // 0x5A is 'Z' key
-            if vk_code == 0x5A {
-                // VK_LWIN is 0x5B, VK_RWIN is 0x5C
+            let config_guard = SHORTCUT_CONFIG.read().unwrap();
+            let config = match &*config_guard {
+                Some(c) => c.clone(),
+                None => ShortcutConfig {
+                    win: true,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    vk_code: 0x5A, // 'Z'
+                    display_name: "Win + Z".to_string(),
+                }
+            };
+
+            if vk_code == config.vk_code {
                 let lwin_down = unsafe { GetAsyncKeyState(0x5B) as u16 & 0x8000 != 0 };
                 let rwin_down = unsafe { GetAsyncKeyState(0x5C) as u16 & 0x8000 != 0 };
+                let win_pressed = lwin_down || rwin_down;
 
-                if lwin_down || rwin_down {
+                let ctrl_pressed = unsafe { GetAsyncKeyState(0x11) as u16 & 0x8000 != 0 };
+                let alt_pressed = unsafe { GetAsyncKeyState(0x12) as u16 & 0x8000 != 0 };
+                let shift_pressed = unsafe { GetAsyncKeyState(0x10) as u16 & 0x8000 != 0 };
+
+                if win_pressed == config.win && ctrl_pressed == config.ctrl && alt_pressed == config.alt && shift_pressed == config.shift {
                     if let Some(app_handle) = APP_HANDLE.get() {
                         let app_handle_clone = app_handle.clone();
                         std::thread::spawn(move || {
@@ -648,7 +909,7 @@ extern "system" fn low_level_keyboard_proc(n_code: i32, w_param: winapi::shared:
                             }
                         });
                     }
-                    // Return 1 to suppress the key event, preventing Windows from opening Snap Layouts
+                    // Return 1 to suppress the key event, preventing Windows from opening Snap Layouts or doing system tasks
                     return 1;
                 }
             }
@@ -738,17 +999,32 @@ pub fn run() {
             copy_to_clipboard,
             update_item_color,
             open_link,
+            get_shortcut,
+            set_shortcut,
         ])
         .setup(move |app| {
             // Setup autostart shortcut in Startup directory
             setup_autostart();
+
+            // Register uninstall registry entry for portable version
+            setup_portable_uninstall_registry();
 
             // Start native Win32 hotkey listener for Win + Z
             start_win32_hotkey_listener(app.handle().clone());
 
             // Initialize persistent storage
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
-            state.init_storage(app_data_dir);
+            state.init_storage(app_data_dir.clone());
+
+            // Load custom shortcut settings
+            let settings_file = app_data_dir.join("quickstack_settings.json");
+            if settings_file.exists() {
+                if let Ok(settings_str) = fs::read_to_string(&settings_file) {
+                    if let Ok(config) = serde_json::from_str::<ShortcutConfig>(&settings_str) {
+                        *SHORTCUT_CONFIG.write().unwrap() = Some(config);
+                    }
+                }
+            }
 
             let handle = app.handle().clone();
             let st = state.clone();

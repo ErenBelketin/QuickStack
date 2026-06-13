@@ -21,7 +21,7 @@ const sortDropdownVal = document.getElementById('sortDropdownVal');
 const sortDropdownOptions = document.getElementById('sortDropdownOptions');
 const sortOptItems = document.querySelectorAll('.sort-opt-item');
 const viewButtons = document.querySelectorAll('.vt-btn');
-const navItems = document.querySelectorAll('.nav-item');
+const navItems = document.querySelectorAll('.nav-item[data-filter]');
 const clearBtn = document.getElementById('clearBtn');
 const addBtn = document.getElementById('addBtn');
 const addModal = document.getElementById('addModal');
@@ -728,6 +728,7 @@ document.addEventListener('keydown', (e) => {
     closeModal();
     closeConfirm(false);
     closeContextMenu();
+    closeSettingsModal();
     if (document.activeElement === searchInput) {
       searchInput.blur();
     }
@@ -749,6 +750,7 @@ listen('clipboard-changed', (event) => {
 // DOM Load Init
 window.addEventListener('DOMContentLoaded', () => {
   fetchItems();
+  loadSettings();
 });
 
 // Infinite scroll for performance
@@ -763,3 +765,140 @@ if (contentArea) {
     }
   });
 }
+
+// Settings Modal Management
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsModal = document.getElementById('settingsModal');
+const settingsModalClose = document.getElementById('settingsModalClose');
+const settingsModalCancel = document.getElementById('settingsModalCancel');
+const settingsModalSubmit = document.getElementById('settingsModalSubmit');
+const hotkeyInput = document.getElementById('hotkeyInput');
+
+let currentHotkey = 'Win + Z';
+let recordedHotkey = '';
+
+async function loadSettings() {
+  try {
+    currentHotkey = await invoke('get_shortcut');
+    hotkeyInput.value = currentHotkey;
+  } catch (err) {
+    console.error('Kısayol yüklenemedi:', err);
+  }
+}
+
+settingsBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  loadSettings();
+  settingsModal.classList.add('visible');
+});
+
+function closeSettingsModal() {
+  settingsModal.classList.remove('visible');
+  hotkeyInput.classList.remove('recording');
+}
+
+settingsModalClose.addEventListener('click', closeSettingsModal);
+settingsModalCancel.addEventListener('click', closeSettingsModal);
+settingsModal.addEventListener('click', (e) => {
+  if (e.target === settingsModal) closeSettingsModal();
+});
+
+hotkeyInput.addEventListener('focus', () => {
+  hotkeyInput.classList.add('recording');
+  hotkeyInput.value = '';
+  recordedHotkey = '';
+});
+
+hotkeyInput.addEventListener('blur', () => {
+  hotkeyInput.classList.remove('recording');
+  if (!recordedHotkey) {
+    hotkeyInput.value = currentHotkey;
+  }
+});
+
+hotkeyInput.addEventListener('keydown', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const key = e.key;
+  if (key === 'Escape') {
+    hotkeyInput.blur();
+    closeSettingsModal();
+    return;
+  }
+
+  const isModifier = ['Control', 'Alt', 'Shift', 'Meta'].includes(key);
+  
+  const parts = [];
+  if (e.metaKey || key === 'Meta') parts.push('Win');
+  if (e.ctrlKey || key === 'Control') parts.push('Ctrl');
+  if (e.altKey || key === 'Alt') parts.push('Alt');
+  if (e.shiftKey || key === 'Shift') parts.push('Shift');
+  
+  if (!isModifier) {
+    let keyName = key;
+    if (keyName === ' ') keyName = 'Space';
+    else if (keyName === 'ArrowUp') keyName = 'Up';
+    else if (keyName === 'ArrowDown') keyName = 'Down';
+    else if (keyName === 'ArrowLeft') keyName = 'Left';
+    else if (keyName === 'ArrowRight') keyName = 'Right';
+    else if (keyName === 'Esc') keyName = 'Escape';
+    
+    if (keyName.length === 1) {
+      keyName = keyName.toUpperCase();
+    }
+    
+    const allowedKeys = [
+      'SPACE', 'TAB', 'ENTER', 'RETURN', 'ESCAPE', 'ESC', 'BACKSPACE', 'INSERT', 'DELETE', 'DEL',
+      'HOME', 'END', 'PAGEUP', 'PGUP', 'PAGEDOWN', 'PGDN', 'UP', 'DOWN', 'LEFT', 'RIGHT'
+    ];
+    
+    const isLetter = /^[A-Z]$/.test(keyName);
+    const isDigit = /^[0-9]$/.test(keyName);
+    const isFunctionKey = /^F[1-9][0-2]?$/.test(keyName);
+    const isAllowedSpecial = allowedKeys.includes(keyName.toUpperCase());
+
+    if (!isLetter && !isDigit && !isFunctionKey && !isAllowedSpecial) {
+      return; // Ignore unsupported keys like CapsLock
+    }
+
+    parts.push(keyName);
+    
+    recordedHotkey = parts.join(' + ');
+    hotkeyInput.value = recordedHotkey;
+  } else {
+    // Modifiers only
+    if (parts.length > 0) {
+      hotkeyInput.value = parts.join(' + ') + ' + ...';
+    }
+  }
+});
+
+settingsModalSubmit.addEventListener('click', async () => {
+  const shortcutToSave = recordedHotkey || currentHotkey;
+  if (!shortcutToSave || shortcutToSave.endsWith('+ ...') || shortcutToSave.endsWith('+')) {
+    showToast('Lütfen geçerli bir tuş kombinasyonu girin (örn. Ctrl + Alt + K)', 'error');
+    return;
+  }
+
+  // Check if modifier is required (standard keys require at least one modifier to prevent capturing normal typing)
+  const hasModifier = shortcutToSave.includes('Win') || shortcutToSave.includes('Ctrl') || shortcutToSave.includes('Alt') || shortcutToSave.includes('Shift');
+  const tokens = shortcutToSave.split(' + ');
+  const mainKey = tokens[tokens.length - 1];
+  const isFunctionKey = /^F[1-9][0-2]?$/.test(mainKey);
+
+  if (!hasModifier && !isFunctionKey) {
+    showToast('Harf, sayı ve diğer normal tuşlar için en az bir niteleyici tuş (Ctrl, Alt, Shift, Win) kullanmalısınız!', 'error');
+    return;
+  }
+
+  try {
+    const savedName = await invoke('set_shortcut', { shortcut: shortcutToSave });
+    currentHotkey = savedName;
+    hotkeyInput.value = savedName;
+    closeSettingsModal();
+    showToast('Kısayol başarıyla kaydedildi: ' + savedName, 'success');
+  } catch (err) {
+    showToast('Kısayol kaydedilemedi: ' + err, 'error');
+  }
+});

@@ -50,6 +50,12 @@
                 <i class="fa-solid fa-star"></i><span>Favoriler</span>
                 <span class="nav-badge" id="badgePinned">0</span>
             </a>
+
+            <div class="nav-divider"></div>
+
+            <a href="#" class="nav-item" id="settingsBtn">
+                <i class="fa-solid fa-gear"></i><span>Ayarlar</span>
+            </a>
         </nav>
 
         <div class="sidebar-bottom">
@@ -159,6 +165,29 @@
             <div class="modal-footer">
                 <button class="btn btn-ghost" id="confirmModalCancel">İptal</button>
                 <button class="btn btn-danger" id="confirmModalSubmit" style="background: var(--rose); color: white; box-shadow: 0 2px 12px rgba(244,63,94,0.28);"><i class="fa-solid fa-trash-can"></i> Evet, Hepsini Sil</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-gear"></i> Ayarlar</h2>
+                <button class="modal-close" id="settingsModalClose"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="hotkeyInput">Pencereyi Göster/Gizle Kısayolu</label>
+                    <div class="hotkey-input-container">
+                        <input type="text" id="hotkeyInput" class="form-input" readonly placeholder="Kısayol tuşuna basın...">
+                    </div>
+                    <span class="form-hint">Kısayolu değiştirmek için kutuya tıklayın ve istediğiniz tuş kombinasyonuna basın. (Örn: Win + Z, Ctrl + Alt + S)</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="settingsModalCancel">İptal</button>
+                <button class="btn btn-primary" id="settingsModalSubmit"><i class="fa-solid fa-check"></i> Kaydet</button>
             </div>
         </div>
     </div>

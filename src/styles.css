@@ -340,3 +340,29 @@ body::after{content:'';position:fixed;inset:0;opacity:.025;background-image:url(
     box-shadow: 0 4px 20px rgba(244, 63, 94, 0.4) !important;
     transform: translateY(-1px);
 }
+
+/* ─── Settings Modal & Hotkey Styles ─── */
+.hotkey-input-container {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.form-hint {
+    font-size: 0.68rem;
+    color: var(--text3);
+    margin-top: 5px;
+    display: block;
+    line-height: 1.45;
+}
+#hotkeyInput {
+    cursor: pointer;
+    font-weight: 600;
+    text-align: center;
+    letter-spacing: 0.5px;
+    caret-color: transparent; /* Hide text cursor */
+}
+#hotkeyInput.recording {
+    border-color: var(--accent);
+    background: rgba(124, 58, 237, 0.05);
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+}
