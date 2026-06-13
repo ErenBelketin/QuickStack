@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
-use tauri::{Emitter, Manager};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 /// Represents a single clipboard/file item
@@ -77,12 +77,20 @@ impl AppState {
 
     /// Save current items to disk
     pub fn save_to_disk(&self) {
-        let data_path = self.data_path.lock().unwrap();
-        if let Some(ref path) = *data_path {
-            let items = self.items.lock().unwrap();
-            if let Ok(json_str) = serde_json::to_string_pretty(&*items) {
-                let _ = fs::write(path, json_str);
-            }
+        let path = {
+            let path_lock = self.data_path.lock().unwrap();
+            path_lock.clone()
+        };
+        if let Some(path) = path {
+            let items = {
+                let items_lock = self.items.lock().unwrap();
+                items_lock.clone()
+            };
+            thread::spawn(move || {
+                if let Ok(json_str) = serde_json::to_string_pretty(&items) {
+                    let _ = fs::write(path, json_str);
+                }
+            });
         }
     }
 }
@@ -370,7 +378,7 @@ fn copy_to_clipboard(app_handle: tauri::AppHandle, content: String) -> Result<()
     use std::sync::mpsc::channel;
 
     let (tx, rx) = channel();
-    
+
     app_handle
         .run_on_main_thread(move || {
             let res = try_copy_to_clipboard(&content);
@@ -446,10 +454,179 @@ fn update_item_title(state: tauri::State<'_, Arc<AppState>>, id: String, title: 
     false
 }
 
+#[tauri::command]
+fn update_item_tags(state: tauri::State<'_, Arc<AppState>>, id: String, tags: Vec<String>) -> bool {
+    let mut items = state.items.lock().unwrap();
+    if let Some(item) = items.iter_mut().find(|i| i.id == id) {
+        item.tags = tags;
+        drop(items);
+        state.save_to_disk();
+        return true;
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn get_clipboard_files() -> Option<Vec<PathBuf>> {
+    use std::os::windows::ffi::OsStringExt;
+    use winapi::shared::ntdef::HANDLE;
+    use winapi::um::winuser::{CloseClipboard, GetClipboardData, OpenClipboard, CF_HDROP};
+
+    extern "system" {
+        fn DragQueryFileW(hDrop: HANDLE, iFile: u32, lpszFile: *mut u16, cch: u32) -> u32;
+    }
+
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return None;
+        }
+
+        let h_data = GetClipboardData(CF_HDROP);
+        if h_data.is_null() {
+            CloseClipboard();
+            return None;
+        }
+
+        let count = DragQueryFileW(h_data, 0xFFFFFFFF, std::ptr::null_mut(), 0);
+        let mut paths = Vec::new();
+
+        for i in 0..count {
+            let len = DragQueryFileW(h_data, i, std::ptr::null_mut(), 0);
+            if len > 0 {
+                let mut buf = vec![0u16; (len + 1) as usize];
+                DragQueryFileW(h_data, i, buf.as_mut_ptr(), buf.len() as u32);
+                buf.pop(); // Remove null terminator
+                let os_str = std::ffi::OsString::from_wide(&buf);
+                paths.push(PathBuf::from(os_str));
+            }
+        }
+
+        CloseClipboard();
+
+        if paths.is_empty() {
+            None
+        } else {
+            Some(paths)
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_clipboard_files() -> Option<Vec<PathBuf>> {
+    None
+}
+
+fn import_file_from_path(
+    _app_handle: &tauri::AppHandle,
+    _state: &Arc<AppState>,
+    path: PathBuf,
+) -> Option<ClipItem> {
+    if !path.exists() {
+        return None;
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Dosya")
+        .to_string();
+
+    let file_size = fs::metadata(&path).map(|m| m.len()).ok();
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let is_image = ["png", "jpg", "jpeg", "gif", "bmp", "webp"].contains(&ext.as_str());
+
+    if is_image {
+        if let Ok(bytes) = fs::read(&path) {
+            let b64 = STANDARD.encode(&bytes);
+            let mime_type = match ext.as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                _ => "image/png",
+            };
+            let data_url = format!("data:{};base64,{}", mime_type, b64);
+
+            return Some(ClipItem {
+                id: Uuid::new_v4().to_string(),
+                title: file_name,
+                preview: format!("Görsel Dosyası ({})", ext.to_uppercase()),
+                content: data_url,
+                item_type: "image".to_string(),
+                pinned: false,
+                favorite: false,
+                created_at: Utc::now().to_rfc3339(),
+                file_size,
+                language: None,
+                tags: Vec::new(),
+                color: None,
+            });
+        }
+    } else {
+        // Try reading as text
+        if let Ok(content) = fs::read_to_string(&path) {
+            if content.len() < 5 * 1024 * 1024 {
+                let item_type = detect_type(&content).to_string();
+                return Some(ClipItem {
+                    id: Uuid::new_v4().to_string(),
+                    title: file_name,
+                    preview: truncate(&content, 200),
+                    language: if item_type == "code" {
+                        detect_language(&content)
+                    } else {
+                        None
+                    },
+                    content,
+                    item_type,
+                    pinned: false,
+                    favorite: false,
+                    created_at: Utc::now().to_rfc3339(),
+                    file_size,
+                    tags: Vec::new(),
+                    color: None,
+                });
+            }
+        }
+    }
+    // Convert to a file link so user can open it
+    let path_url = format!("file:///{}", path.to_string_lossy().replace('\\', "/"));
+    Some(ClipItem {
+        id: Uuid::new_v4().to_string(),
+        title: file_name,
+        preview: format!("Dosya Bağlantısı ({})", ext.to_uppercase()),
+        content: path_url,
+        item_type: "link".to_string(),
+        pinned: false,
+        favorite: false,
+        created_at: Utc::now().to_rfc3339(),
+        file_size,
+        language: None,
+        tags: Vec::new(),
+        color: None,
+    })
+}
+
 // ─── Clipboard monitoring thread ───
 
 fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
     thread::spawn(move || {
+        let mut clipboard = match Clipboard::new() {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("Failed to initialize clipboard: {}", e);
+                None
+            }
+        };
+
+        #[cfg(target_os = "windows")]
+        let mut last_seq = 0;
+
         loop {
             thread::sleep(Duration::from_millis(300));
 
@@ -459,63 +636,111 @@ fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
                 continue;
             }
 
-            let mut clipboard = match Clipboard::new() {
-                Ok(c) => c,
-                Err(_) => continue,
+            #[cfg(target_os = "windows")]
+            {
+                let seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+                if seq == last_seq {
+                    continue;
+                }
+                last_seq = seq;
+            }
+
+            // Check for file changes in clipboard (Windows CF_HDROP)
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(files) = get_clipboard_files() {
+                    if !files.is_empty() {
+                        let paths_str: String = files
+                            .iter()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect::<Vec<String>>()
+                            .join("|");
+                        let last = state.last_text.lock().unwrap().clone();
+                        if paths_str != last {
+                            *state.last_text.lock().unwrap() = paths_str.clone();
+
+                            for path in files.into_iter().rev() {
+                                if let Some(item) = import_file_from_path(&app_handle, &state, path)
+                                {
+                                    let mut items = state.items.lock().unwrap();
+                                    let already_exists =
+                                        items.iter().any(|i| i.content == item.content);
+                                    if !already_exists {
+                                        let cloned = item.clone();
+                                        items.insert(0, item);
+                                        drop(items);
+                                        state.save_to_disk();
+                                        let _ = app_handle.emit("clipboard-changed", cloned);
+                                    } else {
+                                        drop(items);
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            if clipboard.is_none() {
+                clipboard = Clipboard::new().ok();
+            }
+
+            let cb = match &mut clipboard {
+                Some(c) => c,
+                None => continue,
             };
 
             // Check for text changes
-            if let Ok(text) = clipboard.get_text() {
+            if let Ok(text) = cb.get_text() {
                 let trimmed = text.trim().to_string();
-                if trimmed.is_empty() {
-                    continue;
-                }
+                if !trimmed.is_empty() {
+                    let last = state.last_text.lock().unwrap().clone();
+                    if trimmed != last {
+                        *state.last_text.lock().unwrap() = trimmed.clone();
 
-                let last = state.last_text.lock().unwrap().clone();
-                if trimmed != last {
-                    *state.last_text.lock().unwrap() = trimmed.clone();
+                        let mut items = state.items.lock().unwrap();
+                        let already_exists = items.iter().any(|i| i.content == trimmed);
 
-                    // Check for duplicates
-                    let items = state.items.lock().unwrap();
-                    let already_exists = items.iter().any(|i| i.content == trimmed);
-                    drop(items);
+                        if !already_exists {
+                            let item_type = detect_type(&trimmed).to_string();
+                            let item = ClipItem {
+                                id: Uuid::new_v4().to_string(),
+                                title: generate_title(&trimmed, &item_type),
+                                preview: truncate(&trimmed, 200),
+                                language: if item_type == "code" {
+                                    detect_language(&trimmed)
+                                } else {
+                                    None
+                                },
+                                content: trimmed,
+                                item_type,
+                                pinned: false,
+                                favorite: false,
+                                created_at: Utc::now().to_rfc3339(),
+                                file_size: None,
+                                tags: Vec::new(),
+                                color: None,
+                            };
 
-                    if !already_exists {
-                        let item_type = detect_type(&trimmed).to_string();
-                        let item = ClipItem {
-                            id: Uuid::new_v4().to_string(),
-                            title: generate_title(&trimmed, &item_type),
-                            preview: truncate(&trimmed, 200),
-                            language: if item_type == "code" {
-                                detect_language(&trimmed)
-                            } else {
-                                None
-                            },
-                            content: trimmed,
-                            item_type,
-                            pinned: false,
-                            favorite: false,
-                            created_at: Utc::now().to_rfc3339(),
-                            file_size: None,
-                            tags: Vec::new(),
-                            color: None,
-                        };
-
-                        let cloned = item.clone();
-                        state.items.lock().unwrap().insert(0, item);
-                        state.save_to_disk();
-                        let _ = app_handle.emit("clipboard-changed", cloned);
+                            let cloned = item.clone();
+                            items.insert(0, item);
+                            drop(items);
+                            state.save_to_disk();
+                            let _ = app_handle.emit("clipboard-changed", cloned);
+                        } else {
+                            drop(items);
+                        }
                     }
                 }
             }
 
             // Check for image changes
-            if let Ok(img) = clipboard.get_image() {
+            if let Ok(img) = cb.get_image() {
                 let pixels: Vec<u8> = img.bytes.to_vec();
                 let width = img.width;
                 let height = img.height;
 
-                // Simple hash for dedup
                 let hash: usize = pixels.iter().take(100).map(|b| *b as usize).sum();
                 let hash_str = format!("img_{}_{}_{}", width, height, hash);
 
@@ -527,10 +752,10 @@ fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
                     let already_exists = items
                         .iter()
                         .any(|i| i.item_type == "image" && i.title == hash_str);
-                    drop(items);
 
                     if !already_exists {
-                        // Convert to PNG base64
+                        drop(items); // Release lock!
+
                         if let Some(img_buf) =
                             image::RgbaImage::from_raw(width as u32, height as u32, pixels)
                         {
@@ -559,11 +784,15 @@ fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
                                 };
 
                                 let cloned = item.clone();
-                                state.items.lock().unwrap().insert(0, item);
+                                let mut items = state.items.lock().unwrap();
+                                items.insert(0, item);
+                                drop(items);
                                 state.save_to_disk();
                                 let _ = app_handle.emit("clipboard-changed", cloned);
                             }
                         }
+                    } else {
+                        drop(items);
                     }
                 }
             }
@@ -575,9 +804,9 @@ fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
 
 #[cfg(target_os = "windows")]
 fn setup_autostart() {
-    use std::process::Command;
     use std::os::windows::process::CommandExt;
-    
+    use std::process::Command;
+
     let exe_path = match std::env::current_exe() {
         Ok(p) => p,
         Err(_) => return,
@@ -625,8 +854,8 @@ fn setup_autostart() {}
 
 #[cfg(target_os = "windows")]
 fn setup_portable_uninstall_registry() {
-    use std::process::Command;
     use std::os::windows::process::CommandExt;
+    use std::process::Command;
 
     let exe_path = match std::env::current_exe() {
         Ok(p) => p,
@@ -635,7 +864,8 @@ fn setup_portable_uninstall_registry() {
     let exe_path_str = exe_path.to_string_lossy().to_string();
 
     let display_name = "QuickStack (Portable)";
-    let reg_key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QuickStackPortable";
+    let reg_key =
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QuickStackPortable";
 
     // Build the uninstall string command
     let uninstall_cmd = format!(
@@ -720,7 +950,6 @@ fn setup_portable_uninstall_registry() {
 
 #[cfg(not(target_os = "windows"))]
 fn setup_portable_uninstall_registry() {}
-
 
 // ─── Native Win32 Hotkey Listener ───
 
@@ -811,14 +1040,28 @@ fn parse_shortcut(shortcut_str: &str) -> Option<ShortcutConfig> {
     }
 
     let mut display_parts = Vec::new();
-    if win { display_parts.push("Win"); }
-    if ctrl { display_parts.push("Ctrl"); }
-    if alt { display_parts.push("Alt"); }
-    if shift { display_parts.push("Shift"); }
+    if win {
+        display_parts.push("Win");
+    }
+    if ctrl {
+        display_parts.push("Ctrl");
+    }
+    if alt {
+        display_parts.push("Alt");
+    }
+    if shift {
+        display_parts.push("Shift");
+    }
 
     let main_key_str = parts.iter().find(|part| {
         let l = part.to_lowercase();
-        l != "win" && l != "super" && l != "windows" && l != "ctrl" && l != "control" && l != "alt" && l != "shift"
+        l != "win"
+            && l != "super"
+            && l != "windows"
+            && l != "ctrl"
+            && l != "control"
+            && l != "alt"
+            && l != "shift"
     })?;
 
     let main_key_cap = if main_key_str.len() == 1 {
@@ -827,7 +1070,9 @@ fn parse_shortcut(shortcut_str: &str) -> Option<ShortcutConfig> {
         let mut chars = main_key_str.chars();
         match chars.next() {
             None => String::new(),
-            Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+            Some(first) => {
+                first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+            }
         }
     };
     display_parts.push(&main_key_cap);
@@ -853,20 +1098,24 @@ fn get_shortcut() -> String {
 
 #[tauri::command]
 fn set_shortcut(app_handle: tauri::AppHandle, shortcut: String) -> Result<String, String> {
-    let parsed = parse_shortcut(&shortcut).ok_or_else(|| "Geçersiz kısayol formatı!".to_string())?;
-    
-    let app_data_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let parsed =
+        parse_shortcut(&shortcut).ok_or_else(|| "Geçersiz kısayol formatı!".to_string())?;
+
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     let settings_file = app_data_dir.join("quickstack_settings.json");
     if let Some(parent) = settings_file.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    
+
     let json_str = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
     fs::write(settings_file, json_str).map_err(|e| e.to_string())?;
-    
+
     let display_name = parsed.display_name.clone();
     *SHORTCUT_CONFIG.write().unwrap() = Some(parsed);
-    
+
     Ok(display_name)
 }
 
@@ -874,8 +1123,14 @@ use std::sync::OnceLock;
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 #[cfg(target_os = "windows")]
-extern "system" fn low_level_keyboard_proc(n_code: i32, w_param: winapi::shared::minwindef::WPARAM, l_param: winapi::shared::minwindef::LPARAM) -> winapi::shared::minwindef::LRESULT {
-    use winapi::um::winuser::{CallNextHookEx, KBDLLHOOKSTRUCT, HC_ACTION, WM_KEYDOWN, WM_SYSKEYDOWN, GetAsyncKeyState};
+extern "system" fn low_level_keyboard_proc(
+    n_code: i32,
+    w_param: winapi::shared::minwindef::WPARAM,
+    l_param: winapi::shared::minwindef::LPARAM,
+) -> winapi::shared::minwindef::LRESULT {
+    use winapi::um::winuser::{
+        CallNextHookEx, GetAsyncKeyState, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
+    };
 
     if n_code == HC_ACTION as i32 {
         let event_type = w_param as u32;
@@ -884,7 +1139,7 @@ extern "system" fn low_level_keyboard_proc(n_code: i32, w_param: winapi::shared:
         if is_key_down {
             let kbd_struct = unsafe { *(l_param as *const KBDLLHOOKSTRUCT) };
             let vk_code = kbd_struct.vkCode;
-            
+
             let config_guard = SHORTCUT_CONFIG.read().unwrap();
             let config = match &*config_guard {
                 Some(c) => c.clone(),
@@ -895,7 +1150,7 @@ extern "system" fn low_level_keyboard_proc(n_code: i32, w_param: winapi::shared:
                     shift: false,
                     vk_code: 0x5A, // 'Z'
                     display_name: "Win + Z".to_string(),
-                }
+                },
             };
 
             if vk_code == config.vk_code {
@@ -907,7 +1162,11 @@ extern "system" fn low_level_keyboard_proc(n_code: i32, w_param: winapi::shared:
                 let alt_pressed = unsafe { GetAsyncKeyState(0x12) as u16 & 0x8000 != 0 };
                 let shift_pressed = unsafe { GetAsyncKeyState(0x10) as u16 & 0x8000 != 0 };
 
-                if win_pressed == config.win && ctrl_pressed == config.ctrl && alt_pressed == config.alt && shift_pressed == config.shift {
+                if win_pressed == config.win
+                    && ctrl_pressed == config.ctrl
+                    && alt_pressed == config.alt
+                    && shift_pressed == config.shift
+                {
                     if let Some(app_handle) = APP_HANDLE.get() {
                         let app_handle_clone = app_handle.clone();
                         std::thread::spawn(move || {
@@ -936,8 +1195,10 @@ fn start_win32_hotkey_listener(app_handle: tauri::AppHandle) {
     let _ = APP_HANDLE.set(app_handle);
 
     std::thread::spawn(|| {
-        use winapi::um::winuser::{SetWindowsHookExW, UnhookWindowsHookEx, GetMessageW, MSG, WH_KEYBOARD_LL};
         use std::ptr;
+        use winapi::um::winuser::{
+            GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, MSG, WH_KEYBOARD_LL,
+        };
 
         unsafe {
             let hook_id = SetWindowsHookExW(
@@ -974,10 +1235,44 @@ pub fn run() {
     let state = Arc::new(AppState::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
+            }
+            tauri::WindowEvent::DragDrop(drag_drop_event) => {
+                if let tauri::DragDropEvent::Drop { paths, .. } = drag_drop_event {
+                    let app_handle = window.app_handle();
+                    let state = app_handle.state::<Arc<AppState>>();
+
+                    for path in paths.clone().into_iter().rev() {
+                        if let Some(item) = import_file_from_path(app_handle, &state, path) {
+                            let mut items = state.items.lock().unwrap();
+                            let existing_idx = items.iter().position(|i| i.content == item.content);
+                            if let Some(idx) = existing_idx {
+                                let mut existing_item = items.remove(idx);
+                                existing_item.created_at = Utc::now().to_rfc3339();
+                                let cloned = existing_item.clone();
+                                items.insert(0, existing_item);
+                                drop(items);
+                                state.save_to_disk();
+                                let _ = app_handle.emit("clipboard-changed", cloned);
+                            } else {
+                                let cloned = item.clone();
+                                items.insert(0, item);
+                                drop(items);
+                                state.save_to_disk();
+                                let _ = app_handle.emit("clipboard-changed", cloned);
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         })
@@ -1011,6 +1306,7 @@ pub fn run() {
             copy_to_clipboard,
             update_item_color,
             update_item_title,
+            update_item_tags,
             open_link,
             get_shortcut,
             set_shortcut,
@@ -1026,7 +1322,10 @@ pub fn run() {
             start_win32_hotkey_listener(app.handle().clone());
 
             // Initialize persistent storage
-            let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data dir");
             state.init_storage(app_data_dir.clone());
 
             // Load custom shortcut settings
@@ -1052,26 +1351,25 @@ pub fn run() {
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
                     }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .build(app)?;
 
             // Register global shortcuts
-            use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, GlobalShortcutExt};
-            
-            let shortcut_ctrl_shift_c = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyC);
+            use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+
+            let shortcut_ctrl_shift_c =
+                Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyC);
             let _ = app.global_shortcut().register(shortcut_ctrl_shift_c);
 
             // Handle startup argument check
