@@ -265,6 +265,7 @@ body::after{content:'';position:fixed;inset:0;opacity:.025;background-image:url(
 /* ─── Modal ─── */
 .modal-overlay{display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px}
 .modal-overlay.visible{display:flex;animation:mIn .2s ease}
+#confirmModal{z-index:2600}
 .modal{width:100%;max-width:480px;background:#111120;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow),0 0 50px rgba(0,0,0,.4);animation:mSlide .25s ease}
 .modal-header{display:flex;align-items:center;justify-content:space-between;padding:22px 22px 14px}
 .modal-header h2{font-size:1.05rem;font-weight:700;display:flex;align-items:center;gap:8px}
