@@ -14,6 +14,7 @@ let draggedItemId = null;
 let lastCopiedFromApp = '';
 let isBulkMode = false;
 let selectedItemIds = new Set();
+let currentWindowMode = 'large';
 
 // Elements
 const bulkModeBtn = document.getElementById('bulkModeBtn');
@@ -169,6 +170,12 @@ function escapeHTML(str) {
 function showToast(message, type = 'info') {
   const notificationsEnabled = localStorage.getItem('quickstack_notifications_enabled') !== 'false';
   if (!notificationsEnabled) return;
+
+  // Limit active toasts to prevent DOM lag on rapid clicks
+  const activeToasts = toastContainer.querySelectorAll('.toast');
+  if (activeToasts.length >= 3) {
+    activeToasts[0].remove();
+  }
 
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
@@ -554,124 +561,153 @@ function saveCategory(name) {
 }
 
 function updateCategoriesSidebar() {
-  if (!sidebarCategories) return;
   const cats = getCategories();
-  sidebarCategories.innerHTML = '';
   
-  cats.forEach(cat => {
-    const count = itemsState.filter(item => item.tags && item.tags.includes(cat)).length;
-    const a = document.createElement('a');
-    a.href = '#';
-    const isCurrent = activeFilter === `category:${cat}`;
-    a.className = `nav-item ${isCurrent ? 'active' : ''}`;
-    a.dataset.category = cat;
-    a.innerHTML = `
-      <i class="fa-solid fa-tag"></i>
-      <span>${escapeHTML(cat)}</span>
-      <span class="nav-badge">${count}</span>
-      <button class="category-delete-btn" title="Kategoriyi Sil"><i class="fa-solid fa-trash-can"></i></button>
-    `;
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      selectFilter(`category:${cat}`, a);
-    });
-
-    // Drag over and drop targeting
-    a.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-    });
-    a.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      a.classList.add('drag-over');
-    });
-    a.addEventListener('dragleave', () => {
-      a.classList.remove('drag-over');
-    });
-    a.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      a.classList.remove('drag-over');
-      const itemId = draggedItemId || e.dataTransfer.getData('text/plain');
-      if (!itemId) return;
-      
-      const targetItem = itemsState.find(i => i.id === itemId);
-      if (!targetItem) return;
-      
-      if (!targetItem.tags) targetItem.tags = [];
-      if (!targetItem.tags.includes(cat)) {
-        const newTags = [...targetItem.tags, cat];
-        try {
-          const success = await invoke('update_item_tags', { id: itemId, tags: newTags });
-          if (success) {
-            targetItem.tags = newTags;
-            render();
-            updateBadges();
-            showToast(`"${targetItem.title}" öğesi "${cat}" kategorisine eklendi.`, 'success');
-          }
-        } catch (err) {
-          showToast('Kategoriye eklenirken hata oluştu: ' + err, 'error');
-        }
-      } else {
-        showToast('Bu öğe zaten bu kategoride!', 'info');
-      }
-    });
-
-    // Delete category
-    const delBtn = a.querySelector('.category-delete-btn');
-    if (delBtn) {
-      delBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
+  if (sidebarCategories) {
+    sidebarCategories.innerHTML = '';
+    
+    cats.forEach(cat => {
+      const count = itemsState.filter(item => item.tags && item.tags.includes(cat)).length;
+      const a = document.createElement('a');
+      a.href = '#';
+      const isCurrent = activeFilter === `category:${cat}`;
+      a.className = `nav-item ${isCurrent ? 'active' : ''}`;
+      a.dataset.category = cat;
+      a.innerHTML = `
+        <i class="fa-solid fa-tag"></i>
+        <span>${escapeHTML(cat)}</span>
+        <span class="nav-badge">${count}</span>
+        <button class="category-delete-btn" title="Kategoriyi Sil"><i class="fa-solid fa-trash-can"></i></button>
+      `;
+      a.addEventListener('click', (e) => {
         e.preventDefault();
+        selectFilter(`category:${cat}`, a);
+      });
+
+      // Drag over and drop targeting
+      a.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      });
+      a.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        a.classList.add('drag-over');
+      });
+      a.addEventListener('dragleave', () => {
+        a.classList.remove('drag-over');
+      });
+      a.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        a.classList.remove('drag-over');
+        const itemId = draggedItemId || e.dataTransfer.getData('text/plain');
+        if (!itemId) return;
         
-        const confirmed = await showCustomConfirm(
-          'Kategoriyi Sil',
-          `"${cat}" kategorisini silmek istediğinize emin misiniz? Bu kategoriye ait öğeler kategoriden çıkarılacaktır.`,
-          'Evet, Sil'
-        );
-        if (confirmed) {
-          let customCats = [];
+        const targetItem = itemsState.find(i => i.id === itemId);
+        if (!targetItem) return;
+        
+        if (!targetItem.tags) targetItem.tags = [];
+        if (!targetItem.tags.includes(cat)) {
+          const newTags = [...targetItem.tags, cat];
           try {
-            const stored = localStorage.getItem('quickstack_custom_categories');
-            if (stored) {
-              customCats = JSON.parse(stored);
+            const success = await invoke('update_item_tags', { id: itemId, tags: newTags });
+            if (success) {
+              targetItem.tags = newTags;
+              render();
+              updateBadges();
+              showToast(`"${targetItem.title}" öğesi "${cat}" kategorisine eklendi.`, 'success');
             }
-          } catch (err) {}
-          customCats = customCats.filter(c => c !== cat);
-          localStorage.setItem('quickstack_custom_categories', JSON.stringify(customCats));
-          
-          for (let item of itemsState) {
-            if (item.tags && item.tags.includes(cat)) {
-              const newTags = item.tags.filter(t => t !== cat);
-              try {
-                await invoke('update_item_tags', { id: item.id, tags: newTags });
-                item.tags = newTags;
-              } catch (err) {
-                console.error(err);
-              }
-            }
+          } catch (err) {
+            showToast('Kategoriye eklenirken hata oluştu: ' + err, 'error');
           }
-          
-          if (activeFilter === `category:${cat}`) {
-            const allBtn = document.querySelector('.nav-item[data-filter="all"]');
-            selectFilter('all', allBtn);
-          } else {
-            render();
-            updateBadges();
-          }
-          showToast('Kategori silindi', 'success');
+        } else {
+          showToast('Bu öğe zaten bu kategoride!', 'info');
         }
       });
-    }
 
-    sidebarCategories.appendChild(a);
-  });
+      // Delete category
+      const delBtn = a.querySelector('.category-delete-btn');
+      if (delBtn) {
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          
+          const confirmed = await showCustomConfirm(
+            'Kategoriyi Sil',
+            `"${cat}" kategorisini silmek istediğinize emin misiniz? Bu kategoriye ait öğeler kategoriden çıkarılacaktır.`,
+            'Evet, Sil'
+          );
+          if (confirmed) {
+            let customCats = [];
+            try {
+              const stored = localStorage.getItem('quickstack_custom_categories');
+              if (stored) {
+                customCats = JSON.parse(stored);
+              }
+            } catch (err) {}
+            customCats = customCats.filter(c => c !== cat);
+            localStorage.setItem('quickstack_custom_categories', JSON.stringify(customCats));
+            
+            for (let item of itemsState) {
+              if (item.tags && item.tags.includes(cat)) {
+                const newTags = item.tags.filter(t => t !== cat);
+                try {
+                  await invoke('update_item_tags', { id: item.id, tags: newTags });
+                  item.tags = newTags;
+                } catch (err) {
+                  console.error(err);
+                }
+              }
+            }
+            
+            if (activeFilter === `category:${cat}`) {
+              const allBtn = document.querySelector('.nav-item[data-filter="all"]');
+              selectFilter('all', allBtn);
+            } else {
+              render();
+              updateBadges();
+            }
+            showToast('Kategori silindi', 'success');
+          }
+        });
+      }
+
+      sidebarCategories.appendChild(a);
+    });
+  }
+
+  // Render small/pano mode categories
+  const smallDynamicFilters = document.getElementById('smallDynamicFilters');
+  if (smallDynamicFilters) {
+    smallDynamicFilters.innerHTML = '';
+    cats.forEach(cat => {
+      const btn = document.createElement('button');
+      const isCurrent = activeFilter === `category:${cat}`;
+      btn.className = `nav-item ${isCurrent ? 'active' : ''}`;
+      btn.dataset.filter = `category:${cat}`;
+      btn.title = cat;
+      btn.innerHTML = `
+        <i class="fa-solid fa-tag"></i>
+        <span>${escapeHTML(cat)}</span>
+      `;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        selectFilter(`category:${cat}`, btn);
+      });
+      smallDynamicFilters.appendChild(btn);
+    });
+  }
 }
 
 function selectFilter(filterValue, element) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  if (element) {
-    element.classList.add('active');
+  // Synchronize active states between sidebar and compact topbar filters
+  document.querySelectorAll(`.nav-item[data-filter="${filterValue}"]`).forEach(n => n.classList.add('active'));
+  
+  if (filterValue && filterValue.startsWith('category:')) {
+    const cat = filterValue.substring(9);
+    document.querySelectorAll(`.nav-item[data-category="${cat}"]`).forEach(n => n.classList.add('active'));
   }
+  
   activeFilter = filterValue;
   renderLimit = 40;
   render();
@@ -937,7 +973,7 @@ if (manageCategoriesDeleteBtn) {
       
       render();
       updateBadges();
-      renderManageCategoriesList();
+      closeManageCategoriesModal();
       showToast('Seçilen kategoriler silindi', 'success');
     }
   });
@@ -966,16 +1002,17 @@ async function updateStats() {
 }
 
 async function copyContent(content, cardEl) {
+  // Instantly show success state in UI for fast responsive feel (Optimistic UI)
+  cardEl.classList.add('copied');
+  showToast('İçerik panoya kopyalandı', 'success');
+
+  setTimeout(() => {
+    cardEl.classList.remove('copied');
+  }, 1000);
+
   try {
     lastCopiedFromApp = content;
     await invoke('copy_to_clipboard', { content });
-    
-    cardEl.classList.add('copied');
-    showToast('İçerik panoya kopyalandı', 'success');
-
-    setTimeout(() => {
-      cardEl.classList.remove('copied');
-    }, 1500);
   } catch (err) {
     showToast('Kopyalama başarısız: ' + err, 'error');
   }
@@ -1513,6 +1550,81 @@ document.addEventListener('drop', async (e) => {
 window.addEventListener('DOMContentLoaded', () => {
   fetchItems();
   loadSettings();
+  
+  listen('window-mode-changed', (event) => {
+    applyWindowModeUI(event.payload);
+  });
+
+  // Bind compact toolbar buttons to main buttons
+  const addBtnSmall = document.getElementById('addBtnSmall');
+  if (addBtnSmall) {
+    addBtnSmall.addEventListener('click', () => {
+      const addBtn = document.getElementById('addBtn');
+      if (addBtn) addBtn.click();
+    });
+  }
+
+  const clearBtnSmall = document.getElementById('clearBtnSmall');
+  if (clearBtnSmall) {
+    clearBtnSmall.addEventListener('click', () => {
+      const clearBtn = document.getElementById('clearBtn');
+      if (clearBtn) clearBtn.click();
+    });
+  }
+
+  const settingsBtnSmall = document.getElementById('settingsBtnSmall');
+  if (settingsBtnSmall) {
+    settingsBtnSmall.addEventListener('click', () => {
+      const settingsBtn = document.getElementById('settingsBtn');
+      if (settingsBtn) settingsBtn.click();
+    });
+  }
+
+  const bulkModeBtnSmall = document.getElementById('bulkModeBtnSmall');
+  if (bulkModeBtnSmall) {
+    bulkModeBtnSmall.addEventListener('click', () => {
+      toggleBulkMode(!isBulkMode);
+    });
+  }
+
+  const addCategoryBtnSmall = document.getElementById('addCategoryBtnSmall');
+  if (addCategoryBtnSmall) {
+    addCategoryBtnSmall.addEventListener('click', (e) => {
+      e.preventDefault();
+      const addCategoryBtn = document.getElementById('addCategoryBtn');
+      if (addCategoryBtn) addCategoryBtn.click();
+    });
+  }
+
+  const manageCategoriesBtnSmall = document.getElementById('manageCategoriesBtnSmall');
+  if (manageCategoriesBtnSmall) {
+    manageCategoriesBtnSmall.addEventListener('click', (e) => {
+      e.preventDefault();
+      const manageCategoriesBtn = document.getElementById('manageCategoriesBtn');
+      if (manageCategoriesBtn) manageCategoriesBtn.click();
+    });
+  }
+
+  const closeBtnSmall = document.getElementById('closeBtnSmall');
+  if (closeBtnSmall) {
+    closeBtnSmall.addEventListener('click', async () => {
+      try {
+        await invoke('hide_window');
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  }
+
+  const smallFilters = document.querySelector('.small-filters');
+  if (smallFilters) {
+    smallFilters.addEventListener('wheel', (e) => {
+      if (e.deltaY !== 0) {
+        e.preventDefault();
+        smallFilters.scrollLeft += e.deltaY;
+      }
+    });
+  }
 });
 
 // Infinite scroll for performance
@@ -1537,6 +1649,7 @@ const settingsModalSubmit = document.getElementById('settingsModalSubmit');
 const hotkeyInput = document.getElementById('hotkeyInput');
 const resetHotkeyBtn = document.getElementById('resetHotkeyBtn');
 const notificationsToggle = document.getElementById('notificationsToggle');
+const windowModeToggle = document.getElementById('windowModeToggle');
 
 let currentHotkey = 'Win + Z';
 let recordedHotkey = '';
@@ -1558,10 +1671,30 @@ async function loadSettings() {
     console.error('Kısayol yüklenemedi:', err);
   }
   
+  try {
+    const mode = await invoke('get_window_mode');
+    applyWindowModeUI(mode);
+  } catch (err) {
+    console.error('Pencere modu yüklenemedi:', err);
+  }
+  
   // Load notification toggle from localStorage
   const notificationsEnabled = localStorage.getItem('quickstack_notifications_enabled') !== 'false';
   if (notificationsToggle) {
     notificationsToggle.checked = notificationsEnabled;
+  }
+}
+
+function applyWindowModeUI(mode) {
+  currentWindowMode = mode;
+  if (mode === 'small') {
+    document.body.classList.add('small-mode');
+  } else {
+    document.body.classList.remove('small-mode');
+  }
+  
+  if (windowModeToggle) {
+    windowModeToggle.checked = (mode === 'small');
   }
 }
 
@@ -1677,13 +1810,19 @@ settingsModalSubmit.addEventListener('click', async () => {
       localStorage.setItem('quickstack_notifications_enabled', notificationsToggle.checked ? 'true' : 'false');
     }
 
+    // Save window mode toggle
+    if (windowModeToggle) {
+      const modeToSave = windowModeToggle.checked ? 'small' : 'large';
+      await invoke('set_window_mode', { mode: modeToSave });
+    }
+
     const savedName = await invoke('set_shortcut', { shortcut: shortcutToSave });
     currentHotkey = savedName;
     hotkeyInput.value = savedName;
     closeSettingsModal();
     showToast('Ayarlar başarıyla kaydedildi.', 'success');
   } catch (err) {
-    showToast('Kısayol kaydedilemedi: ' + err, 'error');
+    showToast('Ayarlar kaydedilemedi: ' + err, 'error');
   }
 });
 
@@ -1710,7 +1849,7 @@ function updateBulkBar() {
   const count = selectedItemIds.size;
   bulkCount.textContent = `${count} öğe seçildi`;
   
-  if (count > 0 && isBulkMode) {
+  if (isBulkMode) {
     bulkBar.classList.add('visible');
   } else {
     bulkBar.classList.remove('visible');
@@ -1722,13 +1861,27 @@ function toggleBulkMode(active) {
   selectedItemIds.clear();
   document.body.classList.toggle('bulk-active', active);
   
+  const bulkModeBtnSmall = document.getElementById('bulkModeBtnSmall');
+  
   if (active) {
-    bulkModeBtn.classList.add('active');
-    bulkModeBtn.innerHTML = `<i class="fa-solid fa-xmark"></i><span>Kapat</span>`;
+    if (bulkModeBtn) {
+      bulkModeBtn.classList.add('active');
+      bulkModeBtn.innerHTML = `<i class="fa-solid fa-xmark"></i><span>Kapat</span>`;
+    }
+    if (bulkModeBtnSmall) {
+      bulkModeBtnSmall.classList.add('active');
+      bulkModeBtnSmall.innerHTML = `<i class="fa-solid fa-xmark"></i>`;
+    }
     showToast('Çoklu seçim modu aktif. Öğeleri seçip işlem yapabilirsiniz.', 'info');
   } else {
-    bulkModeBtn.classList.remove('active');
-    bulkModeBtn.innerHTML = `<i class="fa-solid fa-list-check"></i><span>Seç</span>`;
+    if (bulkModeBtn) {
+      bulkModeBtn.classList.remove('active');
+      bulkModeBtn.innerHTML = `<i class="fa-solid fa-list-check"></i><span>Seç</span>`;
+    }
+    if (bulkModeBtnSmall) {
+      bulkModeBtnSmall.classList.remove('active');
+      bulkModeBtnSmall.innerHTML = `<i class="fa-solid fa-list-check"></i>`;
+    }
   }
   
   render();

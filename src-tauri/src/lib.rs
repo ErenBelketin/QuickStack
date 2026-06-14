@@ -6,8 +6,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::Duration;
-use tauri::menu::{Menu, MenuItem};
+use std::time::{Duration, Instant};
+use tauri::menu::{Menu, MenuItem, CheckMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
@@ -247,28 +247,42 @@ fn add_item(
     item_type: Option<String>,
 ) -> ClipItem {
     let detected_type = item_type.unwrap_or_else(|| detect_type(&content).to_string());
-    let item = ClipItem {
-        id: Uuid::new_v4().to_string(),
-        title: generate_title(&content, &detected_type),
-        preview: truncate(&content, 200),
-        language: if detected_type == "code" {
-            detect_language(&content)
-        } else {
-            None
-        },
-        content,
-        item_type: detected_type,
-        pinned: false,
-        favorite: false,
-        created_at: Utc::now().to_rfc3339(),
-        file_size: None,
-        tags: Vec::new(),
-        color: None,
-    };
-    let cloned = item.clone();
-    state.items.lock().unwrap().insert(0, item);
-    state.save_to_disk();
-    cloned
+    
+    let mut items = state.items.lock().unwrap();
+    let existing_idx = items.iter().position(|i| i.content == content);
+    if let Some(idx) = existing_idx {
+        let mut existing_item = items.remove(idx);
+        existing_item.created_at = Utc::now().to_rfc3339();
+        let cloned = existing_item.clone();
+        items.insert(0, existing_item);
+        drop(items);
+        state.save_to_disk();
+        cloned
+    } else {
+        let item = ClipItem {
+            id: Uuid::new_v4().to_string(),
+            title: generate_title(&content, &detected_type),
+            preview: truncate(&content, 200),
+            language: if detected_type == "code" {
+                detect_language(&content)
+            } else {
+                None
+            },
+            content,
+            item_type: detected_type,
+            pinned: false,
+            favorite: false,
+            created_at: Utc::now().to_rfc3339(),
+            file_size: None,
+            tags: Vec::new(),
+            color: None,
+        };
+        let cloned = item.clone();
+        items.insert(0, item);
+        drop(items);
+        state.save_to_disk();
+        cloned
+    }
 }
 
 #[tauri::command]
@@ -374,10 +388,20 @@ fn toggle_monitoring(state: tauri::State<'_, Arc<AppState>>) -> bool {
 }
 
 #[tauri::command]
-fn copy_to_clipboard(app_handle: tauri::AppHandle, content: String) -> Result<(), String> {
+fn copy_to_clipboard(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    content: String,
+) -> Result<(), String> {
     use std::sync::mpsc::channel;
 
     let (tx, rx) = channel();
+
+    // Update last_text immediately so the monitor thread ignores this change
+    {
+        let mut last_text = state.last_text.lock().unwrap();
+        *last_text = content.clone();
+    }
 
     app_handle
         .run_on_main_thread(move || {
@@ -392,12 +416,12 @@ fn copy_to_clipboard(app_handle: tauri::AppHandle, content: String) -> Result<()
 
 fn try_copy_to_clipboard(content: &str) -> Result<(), String> {
     let mut last_err = String::new();
-    for _ in 0..3 {
+    for _ in 0..10 {
         match try_copy_to_clipboard_once(content) {
             Ok(_) => return Ok(()),
             Err(e) => {
                 last_err = e;
-                std::thread::sleep(std::time::Duration::from_millis(30));
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
     }
@@ -700,9 +724,17 @@ fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
                         *state.last_text.lock().unwrap() = trimmed.clone();
 
                         let mut items = state.items.lock().unwrap();
-                        let already_exists = items.iter().any(|i| i.content == trimmed);
+                        let existing_idx = items.iter().position(|i| i.content == trimmed);
 
-                        if !already_exists {
+                        if let Some(idx) = existing_idx {
+                            let mut existing_item = items.remove(idx);
+                            existing_item.created_at = Utc::now().to_rfc3339();
+                            let cloned = existing_item.clone();
+                            items.insert(0, existing_item);
+                            drop(items);
+                            state.save_to_disk();
+                            let _ = app_handle.emit("clipboard-changed", cloned);
+                        } else {
                             let item_type = detect_type(&trimmed).to_string();
                             let item = ClipItem {
                                 id: Uuid::new_v4().to_string(),
@@ -728,8 +760,6 @@ fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
                             drop(items);
                             state.save_to_disk();
                             let _ = app_handle.emit("clipboard-changed", cloned);
-                        } else {
-                            drop(items);
                         }
                     }
                 }
@@ -748,12 +778,20 @@ fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
                 if hash_str != last_img {
                     *state.last_image_hash.lock().unwrap() = hash_str.clone();
 
-                    let items = state.items.lock().unwrap();
-                    let already_exists = items
+                    let mut items = state.items.lock().unwrap();
+                    let existing_idx = items
                         .iter()
-                        .any(|i| i.item_type == "image" && i.title == hash_str);
+                        .position(|i| i.item_type == "image" && i.title == hash_str);
 
-                    if !already_exists {
+                    if let Some(idx) = existing_idx {
+                        let mut existing_item = items.remove(idx);
+                        existing_item.created_at = Utc::now().to_rfc3339();
+                        let cloned = existing_item.clone();
+                        items.insert(0, existing_item);
+                        drop(items);
+                        state.save_to_disk();
+                        let _ = app_handle.emit("clipboard-changed", cloned);
+                    } else {
                         drop(items); // Release lock!
 
                         if let Some(img_buf) =
@@ -791,8 +829,6 @@ fn start_clipboard_monitor(app_handle: tauri::AppHandle, state: Arc<AppState>) {
                                 let _ = app_handle.emit("clipboard-changed", cloned);
                             }
                         }
-                    } else {
-                        drop(items);
                     }
                 }
             }
@@ -953,6 +989,26 @@ fn setup_portable_uninstall_registry() {}
 
 // ─── Native Win32 Hotkey Listener ───
 
+fn default_window_mode() -> String {
+    "large".to_string()
+}
+
+fn default_small_width() -> f64 {
+    360.0
+}
+
+fn default_small_height() -> f64 {
+    550.0
+}
+
+fn default_small_x() -> Option<f64> {
+    None
+}
+
+fn default_small_y() -> Option<f64> {
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutConfig {
     pub win: bool,
@@ -961,9 +1017,20 @@ pub struct ShortcutConfig {
     pub shift: bool,
     pub vk_code: u32,
     pub display_name: String,
+    #[serde(default = "default_window_mode")]
+    pub window_mode: String,
+    #[serde(default = "default_small_width")]
+    pub small_width: f64,
+    #[serde(default = "default_small_height")]
+    pub small_height: f64,
+    #[serde(default = "default_small_x")]
+    pub small_x: Option<f64>,
+    #[serde(default = "default_small_y")]
+    pub small_y: Option<f64>,
 }
 
 static SHORTCUT_CONFIG: RwLock<Option<ShortcutConfig>> = RwLock::new(None);
+static TRAY_CHECK_ITEM: std::sync::OnceLock<tauri::menu::CheckMenuItem<tauri::Wry>> = std::sync::OnceLock::new();
 
 fn parse_shortcut(shortcut_str: &str) -> Option<ShortcutConfig> {
     let mut win = false;
@@ -1084,6 +1151,11 @@ fn parse_shortcut(shortcut_str: &str) -> Option<ShortcutConfig> {
         shift,
         vk_code,
         display_name: display_parts.join(" + "),
+        window_mode: "large".to_string(),
+        small_width: 360.0,
+        small_height: 550.0,
+        small_x: None,
+        small_y: None,
     })
 }
 
@@ -1098,8 +1170,22 @@ fn get_shortcut() -> String {
 
 #[tauri::command]
 fn set_shortcut(app_handle: tauri::AppHandle, shortcut: String) -> Result<String, String> {
-    let parsed =
+    let mut parsed =
         parse_shortcut(&shortcut).ok_or_else(|| "Geçersiz kısayol formatı!".to_string())?;
+
+    // Preserve current window configuration (mode, size, position)
+    let (current_mode, small_w, small_h, small_x, small_y) = {
+        let config_guard = SHORTCUT_CONFIG.read().unwrap();
+        match &*config_guard {
+            Some(c) => (c.window_mode.clone(), c.small_width, c.small_height, c.small_x, c.small_y),
+            None => ("large".to_string(), 360.0, 550.0, None, None),
+        }
+    };
+    parsed.window_mode = current_mode;
+    parsed.small_width = small_w;
+    parsed.small_height = small_h;
+    parsed.small_x = small_x;
+    parsed.small_y = small_y;
 
     let app_data_dir = app_handle
         .path()
@@ -1117,6 +1203,143 @@ fn set_shortcut(app_handle: tauri::AppHandle, shortcut: String) -> Result<String
     *SHORTCUT_CONFIG.write().unwrap() = Some(parsed);
 
     Ok(display_name)
+}
+
+fn log_debug(msg: &str) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("C:/Users/ASUS/AppData/Local/agy/bin/debug_log.txt")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "[{}] {}", Utc::now().to_rfc3339(), msg);
+    }
+}
+
+static CURRENTLY_APPLIED_MODE: RwLock<Option<String>> = RwLock::new(None);
+static LAST_MODE_CHANGE: RwLock<Option<Instant>> = RwLock::new(None);
+
+fn apply_window_mode(window: &tauri::WebviewWindow, mode: &str) {
+    let _ = window.set_always_on_top(true);
+    let mut applied_guard = CURRENTLY_APPLIED_MODE.write().unwrap();
+    let prev_mode = applied_guard.clone();
+    *applied_guard = Some(mode.to_string());
+
+    if let Ok(mut last_change) = LAST_MODE_CHANGE.write() {
+        *last_change = Some(Instant::now());
+    }
+
+    if mode == "small" {
+        let _ = window.set_decorations(false);
+        let _ = window.set_resizable(true);
+        
+        // Dynamically set small mode minimum size constraints
+        let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize::new(200.0, 250.0))));
+        
+        let (width, height, x_opt, y_opt) = {
+            let config_guard = SHORTCUT_CONFIG.read().unwrap();
+            match &*config_guard {
+                Some(c) => (c.small_width.max(200.0), c.small_height.max(250.0), c.small_x, c.small_y),
+                None => (360.0, 550.0, None, None),
+            }
+        };
+        log_debug(&format!("apply_window_mode: small, target width={}, height={}, x={:?}, y={:?}", width, height, x_opt, y_opt));
+        
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
+        
+        if let (Some(x), Some(y)) = (x_opt, y_opt) {
+            let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+        } else {
+            // Position at bottom right
+            if let Ok(Some(monitor)) = window.primary_monitor() {
+                let monitor_size = monitor.size();
+                let scale_factor = monitor.scale_factor();
+                let logical_monitor = monitor_size.to_logical::<f64>(scale_factor);
+                
+                let x = logical_monitor.width - width - 15.0;
+                let y = logical_monitor.height - height - 55.0; // leave room for taskbar
+                let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+                
+                // Save this initial position so it starts there next time
+                let mut config_guard = SHORTCUT_CONFIG.write().unwrap();
+                if let Some(config) = &mut *config_guard {
+                    config.small_x = Some(x);
+                    config.small_y = Some(y);
+                    if let Ok(app_data_dir) = window.app_handle().path().app_data_dir() {
+                        let settings_file = app_data_dir.join("quickstack_settings.json");
+                        let _ = serde_json::to_string_pretty(&config).map(|json| fs::write(settings_file, json));
+                    }
+                }
+            }
+        }
+    } else {
+        let _ = window.set_decorations(true);
+        let _ = window.set_resizable(true);
+        
+        // Restore standard minimum size for large mode
+        let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize::new(680.0, 500.0))));
+        
+        if prev_mode.is_none() || prev_mode.as_deref() == Some("small") {
+            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(1100.0, 720.0)));
+            let _ = window.center();
+        }
+    }
+}
+
+#[tauri::command]
+fn get_window_mode() -> String {
+    let config_guard = SHORTCUT_CONFIG.read().unwrap();
+    match &*config_guard {
+        Some(c) => c.window_mode.clone(),
+        None => "large".to_string(),
+    }
+}
+
+#[tauri::command]
+fn set_window_mode(app_handle: tauri::AppHandle, mode: String) -> Result<(), String> {
+    let mut config_guard = SHORTCUT_CONFIG.write().unwrap();
+    let config = config_guard.get_or_insert_with(|| ShortcutConfig {
+        win: true,
+        ctrl: false,
+        alt: false,
+        shift: false,
+        vk_code: 0x5a, // 'Z' key
+        display_name: "Win + Z".to_string(),
+        window_mode: "large".to_string(),
+        small_width: 360.0,
+        small_height: 550.0,
+        small_x: None,
+        small_y: None,
+    });
+    config.window_mode = mode.clone();
+    
+    // Save to disk
+    let app_data_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let settings_file = app_data_dir.join("quickstack_settings.json");
+    let json_str = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    fs::write(settings_file, json_str).map_err(|e| e.to_string())?;
+    
+    // Drop the lock here explicitly to prevent deadlocks when apply_window_mode triggers events!
+    drop(config_guard);
+    
+    // Apply to window
+    if let Some(window) = app_handle.get_webview_window("main") {
+        apply_window_mode(&window, &mode);
+    }
+    
+    // Update tray menu checked state
+    if let Some(item) = TRAY_CHECK_ITEM.get() {
+        let _ = item.set_checked(mode == "small");
+    }
+    
+    // Notify frontend
+    let _ = app_handle.emit("window-mode-changed", mode);
+    Ok(())
+}
+
+#[tauri::command]
+fn hide_window(window: tauri::WebviewWindow) {
+    let _ = window.hide();
 }
 
 use std::sync::OnceLock;
@@ -1150,6 +1373,11 @@ extern "system" fn low_level_keyboard_proc(
                     shift: false,
                     vk_code: 0x5A, // 'Z'
                     display_name: "Win + Z".to_string(),
+                    window_mode: "large".to_string(),
+                    small_width: 360.0,
+                    small_height: 550.0,
+                    small_x: None,
+                    small_y: None,
                 },
             };
 
@@ -1171,11 +1399,40 @@ extern "system" fn low_level_keyboard_proc(
                         let app_handle_clone = app_handle.clone();
                         std::thread::spawn(move || {
                             if let Some(window) = app_handle_clone.get_webview_window("main") {
-                                if window.is_visible().unwrap_or(false) {
-                                    let _ = window.hide();
-                                } else {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
+                                #[cfg(target_os = "windows")]
+                                {
+                                    use winapi::um::winuser::GetForegroundWindow;
+
+                                    let our_hwnd = window.hwnd();
+                                    let active_hwnd = unsafe { GetForegroundWindow() };
+
+                                    let is_active = match our_hwnd {
+                                        Ok(hwnd) => {
+                                            let raw_hwnd = hwnd.0;
+                                            !raw_hwnd.is_null() && (raw_hwnd as winapi::shared::windef::HWND == active_hwnd)
+                                        }
+                                        Err(_) => false,
+                                    };
+                                    let is_minimized = window.is_minimized().unwrap_or(false);
+
+                                    if is_active && !is_minimized {
+                                        let _ = window.hide();
+                                    } else {
+                                        if is_minimized {
+                                            let _ = window.unminimize();
+                                        }
+                                        let _ = window.show();
+                                        let _ = window.set_focus();
+                                    }
+                                }
+                                #[cfg(not(target_os = "windows"))]
+                                {
+                                    if window.is_visible().unwrap_or(false) {
+                                        let _ = window.hide();
+                                    } else {
+                                        let _ = window.show();
+                                        let _ = window.set_focus();
+                                    }
                                 }
                             }
                         });
@@ -1239,12 +1496,102 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
+                let window_mode = {
+                    let config_guard = SHORTCUT_CONFIG.read().unwrap();
+                    match &*config_guard {
+                        Some(c) => c.window_mode.clone(),
+                        None => "large".to_string(),
+                    }
+                };
+                apply_window_mode(&window, &window_mode);
             }
         }))
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
+            }
+            tauri::WindowEvent::Resized(size) => {
+                let is_small = {
+                    let config_guard = SHORTCUT_CONFIG.read().unwrap();
+                    match &*config_guard {
+                        Some(c) => c.window_mode == "small",
+                        None => false,
+                    }
+                };
+                let should_ignore = {
+                    if let Ok(last_change_guard) = LAST_MODE_CHANGE.read() {
+                        if let Some(instant) = *last_change_guard {
+                            instant.elapsed() < Duration::from_millis(1000)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                log_debug(&format!("Resized event: size={:?}, is_small={}, should_ignore={}", size, is_small, should_ignore));
+
+                if is_small {
+                    if !should_ignore {
+                        let scale_factor = window.scale_factor().unwrap_or(1.0);
+                        let logical_size = size.to_logical::<f64>(scale_factor);
+                        log_debug(&format!("Processing Resized: logical_size={:?}, scale_factor={}", logical_size, scale_factor));
+                        if logical_size.width > 100.0 && logical_size.height > 100.0 {
+                            let mut config_guard = SHORTCUT_CONFIG.write().unwrap();
+                            if let Some(config) = &mut *config_guard {
+                                config.small_width = logical_size.width.max(200.0);
+                                config.small_height = logical_size.height.max(250.0);
+                                log_debug(&format!("Saved new small size: {}x{}", config.small_width, config.small_height));
+                                
+                                // Save config to disk
+                                if let Ok(app_data_dir) = window.app_handle().path().app_data_dir() {
+                                    let settings_file = app_data_dir.join("quickstack_settings.json");
+                                    let _ = serde_json::to_string_pretty(&config).map(|json| fs::write(settings_file, json));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            tauri::WindowEvent::Moved(pos) => {
+                let is_small = {
+                    let config_guard = SHORTCUT_CONFIG.read().unwrap();
+                    match &*config_guard {
+                        Some(c) => c.window_mode == "small",
+                        None => false,
+                    }
+                };
+                let should_ignore = {
+                    if let Ok(last_change_guard) = LAST_MODE_CHANGE.read() {
+                        if let Some(instant) = *last_change_guard {
+                            instant.elapsed() < Duration::from_millis(1000)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                if is_small && !should_ignore {
+                    let scale_factor = window.scale_factor().unwrap_or(1.0);
+                    let logical_pos = pos.to_logical::<f64>(scale_factor);
+                    
+                    let mut config_guard = SHORTCUT_CONFIG.write().unwrap();
+                    if let Some(config) = &mut *config_guard {
+                        config.small_x = Some(logical_pos.x);
+                        config.small_y = Some(logical_pos.y);
+                        log_debug(&format!("Saved new small position: {},{}", logical_pos.x, logical_pos.y));
+                        
+                        // Save config to disk
+                        if let Ok(app_data_dir) = window.app_handle().path().app_data_dir() {
+                            let settings_file = app_data_dir.join("quickstack_settings.json");
+                            let _ = serde_json::to_string_pretty(&config).map(|json| fs::write(settings_file, json));
+                        }
+                    }
+                }
             }
             tauri::WindowEvent::DragDrop(drag_drop_event) => {
                 if let tauri::DragDropEvent::Drop { paths, .. } = drag_drop_event {
@@ -1285,6 +1632,14 @@ pub fn run() {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
+                                let window_mode = {
+                                    let config_guard = SHORTCUT_CONFIG.read().unwrap();
+                                    match &*config_guard {
+                                        Some(c) => c.window_mode.clone(),
+                                        None => "large".to_string(),
+                                    }
+                                };
+                                apply_window_mode(&window, &window_mode);
                             }
                         }
                     }
@@ -1310,6 +1665,9 @@ pub fn run() {
             open_link,
             get_shortcut,
             set_shortcut,
+            get_window_mode,
+            set_window_mode,
+            hide_window,
         ])
         .setup(move |app| {
             // Setup autostart shortcut in Startup directory
@@ -1338,24 +1696,77 @@ pub fn run() {
                 }
             }
 
+            // Apply window mode on startup
+            if let Some(window) = app.get_webview_window("main") {
+                let window_mode = {
+                    let config_guard = SHORTCUT_CONFIG.read().unwrap();
+                    match &*config_guard {
+                        Some(c) => c.window_mode.clone(),
+                        None => "large".to_string(),
+                    }
+                };
+                apply_window_mode(&window, &window_mode);
+            }
+
             let handle = app.handle().clone();
             let st = state.clone();
             start_clipboard_monitor(handle, st);
 
             // Create tray menu
+            let is_small = {
+                let config_guard = SHORTCUT_CONFIG.read().unwrap();
+                match &*config_guard {
+                    Some(c) => c.window_mode == "small",
+                    None => false,
+                }
+            };
+
             let show_i = MenuItem::with_id(app, "show", "QuickStack'i Göster", true, None::<&str>)?;
+            let small_mode_i = CheckMenuItem::with_id(
+                app,
+                "small_mode",
+                "Ufak Mod (Pano)",
+                true,
+                is_small,
+                None::<&str>,
+            )?;
+            let _ = TRAY_CHECK_ITEM.set(small_mode_i.clone());
             let quit_i = MenuItem::with_id(app, "quit", "Çıkış", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&show_i, &small_mode_i, &quit_i])?;
 
             // Create tray icon
+            let small_mode_i_clone = small_mode_i.clone();
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
+                .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
+                        }
+                    }
+                    "small_mode" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let current_mode = {
+                                let mut config_guard = SHORTCUT_CONFIG.write().unwrap();
+                                if let Some(config) = &mut *config_guard {
+                                    let new_mode = if config.window_mode == "small" { "large" } else { "small" };
+                                    config.window_mode = new_mode.to_string();
+                                    
+                                    if let Ok(app_data_dir) = app.path().app_data_dir() {
+                                        let settings_file = app_data_dir.join("quickstack_settings.json");
+                                        let _ = serde_json::to_string_pretty(&config).map(|json| fs::write(settings_file, json));
+                                    }
+                                    config.window_mode.clone()
+                                } else {
+                                    "large".to_string()
+                                }
+                            };
+                            
+                            apply_window_mode(&window, &current_mode);
+                            let _ = small_mode_i_clone.set_checked(current_mode == "small");
+                            let _ = app.emit("window-mode-changed", current_mode);
                         }
                     }
                     "quit" => {
@@ -1380,6 +1791,14 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                    let window_mode = {
+                        let config_guard = SHORTCUT_CONFIG.read().unwrap();
+                        match &*config_guard {
+                            Some(c) => c.window_mode.clone(),
+                            None => "large".to_string(),
+                        }
+                    };
+                    apply_window_mode(&window, &window_mode);
                 }
             }
 

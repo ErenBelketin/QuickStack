@@ -92,32 +92,60 @@
     <main class="main">
         <!-- Topbar -->
         <header class="topbar">
-            <button class="sidebar-toggle" id="sidebarToggle"><i class="fa-solid fa-bars"></i></button>
-
-            <div class="search-box">
-                <i class="fa-solid fa-magnifying-glass"></i>
-                <input type="text" id="searchInput" placeholder="Öğeleri ara... (/ ile odaklan)">
+            <div class="window-drag-handle" data-tauri-drag-region>
+                <span class="drag-grip" data-tauri-drag-region></span>
             </div>
+            <div class="topbar-row">
+                <button class="sidebar-toggle" id="sidebarToggle"><i class="fa-solid fa-bars"></i></button>
 
-            <div class="topbar-actions">
-                <div class="sort-wrap" id="sortDropdown">
-                    <button class="sort-btn" id="sortDropdownBtn">
-                        <span id="sortDropdownVal">En Yeni</span>
-                        <i class="fa-solid fa-chevron-down"></i>
-                    </button>
-                    <div class="sort-options" id="sortDropdownOptions">
-                        <div class="sort-opt-item active" data-value="newest">En Yeni</div>
-                        <div class="sort-opt-item" data-value="oldest">En Eski</div>
-                        <div class="sort-opt-item" data-value="name">Ada Göre</div>
+                <div class="search-box">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input type="text" id="searchInput" placeholder="Öğeleri ara... (/ ile odaklan)">
+                </div>
+
+                <!-- Compact toolbar for small mode -->
+                <div class="small-toolbar">
+                    <button class="small-tb-btn" id="addBtnSmall" title="Yeni Ekle"><i class="fa-solid fa-plus"></i></button>
+                    <button class="small-tb-btn" id="bulkModeBtnSmall" title="Çoklu Seçim"><i class="fa-solid fa-list-check"></i></button>
+                    <button class="small-tb-btn" id="clearBtnSmall" title="Temizle"><i class="fa-solid fa-trash-can"></i></button>
+                    <button class="small-tb-btn" id="settingsBtnSmall" title="Ayarlar"><i class="fa-solid fa-gear"></i></button>
+                    <button class="small-tb-btn" id="closeBtnSmall" title="Kapat"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+
+                <div class="topbar-actions">
+                    <div class="sort-wrap" id="sortDropdown">
+                        <button class="sort-btn" id="sortDropdownBtn">
+                            <span id="sortDropdownVal">En Yeni</span>
+                            <i class="fa-solid fa-chevron-down"></i>
+                        </button>
+                        <div class="sort-options" id="sortDropdownOptions">
+                            <div class="sort-opt-item active" data-value="newest">En Yeni</div>
+                            <div class="sort-opt-item" data-value="oldest">En Eski</div>
+                            <div class="sort-opt-item" data-value="name">Ada Göre</div>
+                        </div>
                     </div>
+                    <div class="view-toggle">
+                        <button class="vt-btn active" data-view="grid"><i class="fa-solid fa-grip"></i></button>
+                        <button class="vt-btn" data-view="list"><i class="fa-solid fa-list"></i></button>
+                    </div>
+                    <button class="btn btn-ghost" id="bulkModeBtn" title="Çoklu Seçim"><i class="fa-solid fa-list-check"></i><span>Seç</span></button>
+                    <button class="btn btn-primary" id="addBtn"><i class="fa-solid fa-plus"></i><span>Yeni Ekle</span></button>
+                    <button class="btn btn-ghost" id="clearBtn" title="Favori olmayanları temizle"><i class="fa-solid fa-trash-can"></i></button>
                 </div>
-                <div class="view-toggle">
-                    <button class="vt-btn active" data-view="grid"><i class="fa-solid fa-grip"></i></button>
-                    <button class="vt-btn" data-view="list"><i class="fa-solid fa-list"></i></button>
+            </div>
+            
+            <div class="topbar-subrow small-filters-row">
+                <div class="small-filters">
+                    <button class="nav-item active" data-filter="all" title="Tümü"><i class="fa-solid fa-border-all"></i><span>Tümü</span></button>
+                    <button class="nav-item" data-filter="text" title="Metin"><i class="fa-solid fa-font"></i><span>Metin</span></button>
+                    <button class="nav-item" data-filter="code" title="Kod"><i class="fa-solid fa-code"></i><span>Kod</span></button>
+                    <button class="nav-item" data-filter="link" title="Bağlantı"><i class="fa-solid fa-link"></i><span>Bağlantı</span></button>
+                    <button class="nav-item" data-filter="image" title="Görsel"><i class="fa-solid fa-image"></i><span>Görsel</span></button>
+                    <button class="nav-item" data-filter="pinned" title="Favoriler"><i class="fa-solid fa-star"></i><span>Favori</span></button>
+                    <div id="smallDynamicFilters" style="display: contents;"></div>
+                    <button class="nav-item" id="addCategoryBtnSmall" title="Kategori Ekle" style="color: var(--accent-l); border: 1px dashed rgba(124,58,237,0.3);"><i class="fa-solid fa-plus"></i><span>Ekle</span></button>
+                    <button class="nav-item" id="manageCategoriesBtnSmall" title="Kategorileri Yönet" style="color: var(--text3);"><i class="fa-solid fa-list-check"></i><span>Yönet</span></button>
                 </div>
-                <button class="btn btn-ghost" id="bulkModeBtn" title="Çoklu Seçim"><i class="fa-solid fa-list-check"></i><span>Seç</span></button>
-                <button class="btn btn-primary" id="addBtn"><i class="fa-solid fa-plus"></i><span>Yeni Ekle</span></button>
-                <button class="btn btn-ghost" id="clearBtn" title="Favori olmayanları temizle"><i class="fa-solid fa-trash-can"></i></button>
             </div>
         </header>
 
@@ -209,6 +237,16 @@
                         <span class="slider"></span>
                     </label>
                 </div>
+                <div class="form-group" style="flex-direction: row; align-items: center; justify-content: space-between; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); user-select: none;">
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        <span style="font-size: 0.82rem; font-weight: 600; color: var(--text);">Ufak Mod (Pano)</span>
+                        <span style="font-size: 0.68rem; color: var(--text3);">Küçük, hızlı erişilebilir sağ-alt pano geçmişi</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="windowModeToggle">
+                        <span class="slider"></span>
+                    </label>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-ghost" id="settingsModalCancel">İptal</button>
@@ -276,7 +314,7 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label for="newCategorySidebarInput">Kategori Adı</label>
-                    <input type="text" id="newCategorySidebarInput" class="form-input" placeholder="Örn: Web sitesi SSleri" autocomplete="off">
+                    <input type="text" id="newCategorySidebarInput" class="form-input" placeholder="" autocomplete="off">
                 </div>
             </div>
             <div class="modal-footer">
