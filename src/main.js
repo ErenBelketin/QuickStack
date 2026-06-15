@@ -1223,11 +1223,26 @@ function openContextMenu(e, item) {
   let x = e.clientX;
   let y = e.clientY;
   
+  const padding = 8;
+  
   if (x + menuWidth > window.innerWidth) {
-    x -= menuWidth;
+    x = window.innerWidth - menuWidth - padding;
   }
+  if (x < padding) {
+    x = padding;
+  }
+  if (x < 0) {
+    x = 0;
+  }
+  
   if (y + menuHeight > window.innerHeight) {
-    y -= menuHeight;
+    y = window.innerHeight - menuHeight - padding;
+  }
+  if (y < padding) {
+    y = padding;
+  }
+  if (y < 0) {
+    y = 0;
   }
   
   contextMenu.style.left = `${x}px`;
