@@ -903,14 +903,15 @@ fn setup_portable_uninstall_registry() {
     let reg_key =
         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QuickStackPortable";
 
-    // Build the uninstall string command
+    // Build the uninstall string command using PowerShell to avoid cmd quoting and environment variable redirection issues
     let uninstall_cmd = format!(
-        "cmd.exe /c \"taskkill /f /im quickstack.exe & \
-         del /f /q \\\"%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\QuickStack.lnk\\\" & \
-         rmdir /s /q \\\"%APPDATA%\\com.quickstack.app\\\" & \
-         reg delete \\\"{}\\\" /f & \
-         powershell -Command \\\"Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('QuickStack ayarları ve kısayolu başarıyla temizlendi. Artık indirdiğiniz exe dosyasını silebilirsiniz.', 'QuickStack Portable')\\\"\"",
-        reg_key
+        "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -Command \
+         \"Stop-Process -Name quickstack -Force -ErrorAction SilentlyContinue; \
+          Remove-Item '$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\QuickStack.lnk' -Force -ErrorAction SilentlyContinue; \
+          Remove-Item '$env:APPDATA\\com.quickstack.app' -Recurse -Force -ErrorAction SilentlyContinue; \
+          Remove-Item -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QuickStackPortable' -Force -ErrorAction SilentlyContinue; \
+          Add-Type -AssemblyName PresentationFramework; \
+          [System.Windows.MessageBox]::Show('QuickStack ayarları ve kısayolu başarıyla temizlendi. Artık indirdiğiniz exe dosyasını silebilirsiniz.', 'QuickStack Portable')\""
     );
 
     // Register DisplayName
